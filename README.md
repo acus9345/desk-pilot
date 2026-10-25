@@ -43,6 +43,26 @@ Requirements: Windows 10 2004 or later / Windows 11, Node 22.19+ on `PATH`. Noth
 - An action whose outcome is unknown (the engine died or timed out after receiving it) is reported as such and never retried. A capture, which has no side effects, is retried.
 - While Claude is acting, a small banner at the top of the screen says so, and **Esc** stops the batch between steps, even during a wait. The banner is excluded from screen capture, so it never covers what Claude is looking at. Interrupting the turn in Claude Code stops it the same way.
 
+## Token cost compared with Windows-MCP
+
+Measured on 2026-10-25 in headless Claude Code runs (Opus 5.5, Claude Code 2.1.304) on one 2560×1600 Windows 11 machine, against Windows-MCP 0.8.5. Numbers are input tokens added to the conversation.
+
+| | desk-pilot | Windows-MCP |
+| --- | --- | --- |
+| Fixed cost per session, tool search on (default) | +191 | +327 |
+| Fixed cost per session, tool search off | +3,655 | +7,857 |
+| One full-screen screenshot | +1,948 (1356×847) | +3,006 (1728×1080) |
+| Reading the UI | +4,455 (`controls`, one busy window) | +7,356 (`Snapshot`, whole desktop) |
+| Loading one tool's schema on first use | +679 (`screen_view`), +1,532 (`desktop_control`) | +564 (`Screenshot`), +931 (`Snapshot`) |
+| Tools | 3 | 20 |
+
+Where the difference comes from:
+
+- Screenshots are shrunk to the size Claude actually uses, an unchanged screen is not sent again, and `diff` sends only the region that changed.
+- `desktop_sequence` runs a multi-step task (click, type, Enter, ...) in one call; each extra call is another model round trip over the whole conversation. This saving was not measured against Windows-MCP.
+
+Caveats: the two UI reads differ in scope (one window vs. the whole desktop). Windows-MCP covers more ground (launching apps, virtual desktops, files, registry, processes, browser DOM), which is part of why its schemas are larger.
+
 ## Settings
 
 Environment variables, for example in the `env` block of Claude Code's `settings.json`:
