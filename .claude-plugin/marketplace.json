@@ -1,0 +1,12 @@
+{
+  "name": "desk-pilot",
+  "description": "Windows desktop control for Claude Code.",
+  "owner": { "name": "momasiku" },
+  "plugins": [
+    {
+      "name": "desk-pilot",
+      "source": "./",
+      "description": "Windows desktop control: screen_view, desktop_control, desktop_sequence."
+    }
+  ]
+}

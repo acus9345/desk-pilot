@@ -1,0 +1,16 @@
+{
+  "name": "desk-pilot",
+  "displayName": "desk-pilot (Windows desktop control)",
+  "version": "0.1.0",
+  "description": "Windows only. Eyes and hands on the real desktop: screen_view returns real screenshots, desktop_control clicks/types and reads UI Automation controls by name, desktop_sequence runs checked batches in one call. Esc cancels.",
+  "author": { "name": "momasiku" },
+  "license": "MIT",
+  "keywords": ["windows", "desktop-automation", "computer-use", "screenshot", "ui-automation"],
+  "mcpServers": {
+    "desktop": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/server.mjs"],
+      "env": { "DESK_PILOT_DATA_DIR": "${CLAUDE_PLUGIN_DATA}" }
+    }
+  }
+}
