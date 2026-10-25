@@ -12,11 +12,16 @@ Three tools (deliberately three: every schema costs tokens):
 
 ## Install
 
-```text
-/plugin install desk-pilot --marketplace acus9345/desk-pilot
+From a terminal:
+
+```bash
+claude plugin marketplace add acus9345/desk-pilot
+claude plugin install desk-pilot@desk-pilot
 ```
 
-or from a checkout: `claude --plugin-dir path\to\desk-pilot`.
+or inside an interactive `claude` session: `/plugin marketplace add acus9345/desk-pilot`, then `/plugin install desk-pilot@desk-pilot`. Start a new session afterwards to load it.
+
+From a checkout, without installing: `claude --plugin-dir path\to\desk-pilot`.
 
 Requirements: Windows 10 2004 or later / Windows 11, Node 22.19+ on `PATH`. Nothing else to install: on first use the plugin compiles its engine with the C# compiler that ships with .NET Framework 4.x in every Windows 10/11 install (~0.2 s), caches it by source hash, and reuses it.
 
