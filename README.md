@@ -13,7 +13,7 @@ Three tools (deliberately three: every schema costs tokens):
 ## Install
 
 ```text
-/plugin install desk-pilot --marketplace <owner>/desk-pilot
+/plugin install desk-pilot --marketplace acus9345/desk-pilot
 ```
 
 or from a checkout: `claude --plugin-dir path\to\desk-pilot`.

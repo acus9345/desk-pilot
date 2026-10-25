@@ -1,7 +1,7 @@
 {
   "name": "desk-pilot",
   "description": "Windows desktop control for Claude Code.",
-  "owner": { "name": "momasiku" },
+  "owner": { "name": "acus9345" },
   "plugins": [
     {
       "name": "desk-pilot",
