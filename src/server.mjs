@@ -37,7 +37,7 @@ const INSTRUCTIONS = 'Windows desktop control. screen_view sees the real screen;
 const config = settings();
 const engine = new Engine(config);
 const handlers = createHandlers(engine, config);
-const server = new Server({ name: 'desk-pilot', version: '0.1.0' }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });
+const server = new Server({ name: 'desk-pilot', version: '0.2.0' }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
 server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
