@@ -40,6 +40,8 @@ export function frameText(f, label = 'frame') {
 function actionSummary(a) {
 	const parts = [];
 	if (a.control) parts.push(a.control);
+	if (a.modifiers) parts.push(`with ${a.modifiers}`);
+	if (a.action === 'window' && a.window) parts.push(`window ${quote(a.window.title)} @ ${a.window.bounds}${a.window.maximized ? ' maximized' : a.window.minimized ? ' minimized' : ''}`);
 	if (a.focused) parts.push(`focus ${a.focused}`);
 	if (a.foreground) parts.push(`fg ${quote(a.foreground.title)}`);
 	const extra = [];
@@ -52,7 +54,7 @@ function actionSummary(a) {
 export function windowsText(a) {
 	const lines = ['<windows>'];
 	for (const w of a.windows ?? []) {
-		const flags = [w.foreground ? 'foreground' : '', w.minimized ? 'minimized' : ''].filter(Boolean).join(',');
+		const flags = [w.foreground ? 'foreground' : '', w.minimized ? 'minimized' : '', w.maximized ? 'maximized' : ''].filter(Boolean).join(',');
 		lines.push(`${w.hwnd} ${quote(w.title)} (${w.process ?? '?'}) @ ${w.bounds}${flags ? ` [${flags}]` : ''}`);
 	}
 	lines.push('</windows>');

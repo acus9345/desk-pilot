@@ -143,6 +143,8 @@ namespace DeskPilot
             var name = ProcessName(Pid(h));
             if (name != null) d["process"] = name;
             d["bounds"] = Bounds(h);
+            if (Native.IsIconic(h)) d["minimized"] = true;
+            else if (Native.IsZoomed(h)) d["maximized"] = true;
             return d;
         }
 

@@ -15,6 +15,8 @@ Everything happens on the person's real screen, mouse and keyboard. Windows only
 ## Act on controls, not pixels
 - `target: "Save"` (add `role: "Button"` if several match) clicks a control by name; `target: 4` uses an index from the last listing. Both re-find the control right before clicking, refuse a disabled one, scroll it into view if needed, and fail loudly if the listing went stale.
 - `type` with a `target` focuses that control first. Text goes in as one paste (clipboard restored); `mode: "keys"` types keystrokes instead.
+- `modifiers: ["ctrl"]` or `["shift"]` on a click adds to or extends a selection (files, list rows); they are released after the click.
+- `{action: "window", title, x, y, width, height}` places a window's visible frame; `show: "minimize" | "maximize" | "restore"` changes its state. Arrange windows before a task so controls are on screen.
 - Pass `title` (or `hwnd`) on input actions: that window is brought to the front first, and the action fails instead of typing into whatever else is in front.
 
 ## Every action reports what happened

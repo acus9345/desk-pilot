@@ -120,6 +120,53 @@ namespace DeskPilot
             return Key(vk, scan, flags);
         }
 
+        /// <summary>Modifiers to hold during a click: ["ctrl","shift"] or "ctrl+shift".</summary>
+        public static List<ushort> Modifiers(object raw, out string label)
+        {
+            var list = new List<ushort>();
+            var names = new List<string>();
+            label = "";
+            if (raw == null) return list;
+            var items = new List<string>();
+            var array = raw as object[];
+            if (array != null) foreach (var o in array) items.Add(Convert.ToString(o));
+            else items.AddRange(Convert.ToString(raw).Split('+'));
+            foreach (var item in items)
+            {
+                var name = (item ?? "").Trim().ToLowerInvariant();
+                if (name.Length == 0) continue;
+                ushort vk;
+                switch (name)
+                {
+                    case "ctrl": case "control": vk = 0x11; name = "ctrl"; break;
+                    case "shift": vk = 0x10; break;
+                    case "alt": vk = 0x12; break;
+                    case "win": case "windows": case "meta": vk = 0x5B; name = "win"; break;
+                    default: throw new ArgumentException("modifiers can be ctrl, shift, alt or win (got '" + item + "')");
+                }
+                if (!list.Contains(vk)) { list.Add(vk); names.Add(name); }
+            }
+            label = string.Join("+", names.ToArray());
+            return list;
+        }
+
+        public static void Press(List<ushort> keys)
+        {
+            if (keys.Count == 0) return;
+            var seq = new List<INPUT>();
+            foreach (var k in keys) seq.Add(VkEvent(k, false));
+            Send(seq.ToArray());
+        }
+
+        /// <summary>Release in reverse order. Never throws: it runs in finally blocks.</summary>
+        public static void Release(List<ushort> keys)
+        {
+            if (keys.Count == 0) return;
+            var seq = new List<INPUT>();
+            for (int i = keys.Count - 1; i >= 0; i--) seq.Add(VkEvent(keys[i], true));
+            try { Send(seq.ToArray()); } catch { }
+        }
+
         /// <summary>"ctrl+shift+s", "alt+tab", "enter", "f5", "win+r", "ctrl++".</summary>
         public static void Chord(string spec)
         {

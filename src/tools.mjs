@@ -6,7 +6,7 @@ import { actionText, frameText, sequenceText } from './format.mjs';
  * how-to lives in the plugin's skill.
  */
 
-const CONTROL_ACTIONS = ['click', 'doubleClick', 'rightClick', 'middleClick', 'move', 'drag', 'scroll', 'type', 'key', 'focus', 'waitFor', 'windows', 'controls'];
+const CONTROL_ACTIONS = ['click', 'doubleClick', 'rightClick', 'middleClick', 'move', 'drag', 'scroll', 'type', 'key', 'focus', 'waitFor', 'window', 'windows', 'controls'];
 const PASSIVE = new Set(['windows', 'controls', 'waitFor']);
 
 const expectSchema = {
@@ -25,8 +25,8 @@ const expectSchema = {
 };
 
 const actionProps = {
-	x: { type: 'integer', description: 'Screen x in physical pixels.' },
-	y: { type: 'integer', description: 'Screen y in physical pixels.' },
+	x: { type: 'integer', description: 'Screen x in physical pixels (window: new left edge).' },
+	y: { type: 'integer', description: 'Screen y in physical pixels (window: new top edge).' },
 	toX: { type: 'integer', description: 'drag end x; nonzero makes scroll horizontal.' },
 	toY: { type: 'integer', description: 'drag end y.' },
 	target: {
@@ -39,6 +39,10 @@ const actionProps = {
 	key: { type: 'string', description: "key: 'enter', 'tab', 'esc', 'f5', 'ctrl+s', 'alt+tab', 'win+r'." },
 	amount: { type: 'integer', description: 'scroll notches, positive is up (default 3).' },
 	button: { type: 'string', enum: ['left', 'right', 'middle'] },
+	modifiers: { type: 'array', items: { type: 'string', enum: ['ctrl', 'shift', 'alt', 'win'] }, description: 'Keys held during a click, drag or scroll (e.g. ["ctrl"] to add to a selection); always released afterwards.' },
+	width: { type: 'integer', description: 'window: new width of the visible frame.' },
+	height: { type: 'integer', description: 'window: new height.' },
+	show: { type: 'string', enum: ['minimize', 'maximize', 'restore'], description: 'window: change its state.' },
 	title: { type: 'string', description: 'Window title or process substring: input goes to it (brought to front first); focus and controls use it.' },
 	hwnd: { type: 'string', description: 'Window handle (0x1094C) instead of title.' },
 	tolerant: { type: 'boolean', description: 'focus: note a refused focus instead of failing.' },
@@ -70,7 +74,7 @@ export const TOOLS = [
 	{
 		name: 'desktop_control',
 		title: 'Desktop control',
-		description: 'Operate the live Windows desktop: click, drag, scroll, type, keys, focus, waitFor, list windows, or read a window\'s UI Automation controls ("index [Role] \'Name\' @ x,y WxH"). Click a control by index or name with target instead of guessing pixels. Every input action reports where input went (foreground window, focused control) and type reads the text back; expect makes the result checked. capture: true adds a frame (only what changed, when possible).',
+		description: 'Operate the live Windows desktop: click (with modifiers for ctrl/shift-click), drag, scroll, type, keys, focus, waitFor, move/resize/minimize/maximize/restore a window, list windows, or read a window\'s UI Automation controls ("index [Role] \'Name\' @ x,y WxH"). Click a control by index or name with target instead of guessing pixels. Every input action reports where input went (foreground window, focused control) and type reads the text back; expect makes the result checked. capture: true adds a frame (only what changed, when possible).',
 		inputSchema: {
 			type: 'object',
 			properties: {

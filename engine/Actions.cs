@@ -60,6 +60,13 @@ namespace DeskPilot
                     if (P.Obj(p, "expect") == null) throw new ArgumentException("waitFor needs expect, e.g. {exists: 'OK'} or {window: 'Save As'}");
                     break;
 
+                case "window":
+                    window = Win.Resolve(p);
+                    if (window == IntPtr.Zero) throw new ArgumentException("window needs a title or an hwnd");
+                    ArrangeWindow(window, p, notes, req);
+                    r["window"] = Win.Describe(window);
+                    break;
+
                 case "type":
                     {
                         var text = P.Str(p, "text");
@@ -175,6 +182,19 @@ namespace DeskPilot
             if (window != IntPtr.Zero && action != "move") EnsureFront(window, req);
             req.Check();
             var button = P.Str(p, "button") ?? "left";
+            string modLabel;
+            var mods = Input.Modifiers(P.Raw(p, "modifiers"), out modLabel);
+            if (mods.Count > 0 && action == "move") throw new ArgumentException("modifiers apply to clicks, drags and scroll, not move");
+            if (mods.Count > 0) r["modifiers"] = modLabel;
+            // Hold the modifiers for exactly the gesture, and release them whatever happens:
+            // a stuck Ctrl would turn every later click and keystroke into a shortcut.
+            Input.Press(mods);
+            try { Gesture(action, p, x, y, button, req); }
+            finally { Input.Release(mods); }
+        }
+
+        static void Gesture(string action, Dictionary<string, object> p, int? x, int? y, string button, Request req)
+        {
             switch (action)
             {
                 case "move": Input.MoveTo(x.Value, y.Value); break;
@@ -197,6 +217,76 @@ namespace DeskPilot
                         Input.Wheel(amount, horizontal);
                         break;
                     }
+            }
+        }
+
+        /// <summary>Move, resize, minimize, maximize or restore a window, then check that it happened.
+        /// Coordinates are the visible frame - the same rectangle `windows` reports - not the
+        /// larger window rectangle that includes Windows 10/11's invisible resize border.</summary>
+        static void ArrangeWindow(IntPtr window, Dictionary<string, object> p, List<object> notes, Request req)
+        {
+            var show = P.Str(p, "show");
+            int? x = P.Int(p, "x"), y = P.Int(p, "y"), w = P.Int(p, "width"), h = P.Int(p, "height");
+            if (show == null && x == null && y == null && w == null && h == null)
+                throw new ArgumentException("window needs show (minimize, maximize, restore) or x/y/width/height");
+            if ((x == null) != (y == null)) throw new ArgumentException("moving a window needs both x and y");
+            if ((w != null && w <= 0) || (h != null && h <= 0)) throw new ArgumentException("width and height must be positive");
+            if (show != null && show != "minimize" && show != "maximize" && show != "restore")
+                throw new ArgumentException("show must be minimize, maximize or restore (got '" + show + "')");
+            if (show != null && (x != null || w != null || h != null) && show != "restore")
+                throw new ArgumentException("use show alone, or x/y/width/height (optionally with show: restore)");
+
+            if (x != null || w != null || h != null)
+            {
+                // A minimized or maximized window ignores a new rectangle until it is restored.
+                if (Native.IsIconic(window) || Native.IsZoomed(window)) { Native.ShowWindow(window, 9); req.Sleep(200); }
+                RECT outer;
+                Native.GetWindowRect(window, out outer);
+                var frame = Native.WindowBounds(window);
+                int left = frame.Left - outer.Left, top = frame.Top - outer.Top;
+                int right = outer.Right - frame.Right, bottom = outer.Bottom - frame.Bottom;
+                int nx = x.HasValue ? x.Value - left : outer.Left;
+                int ny = y.HasValue ? y.Value - top : outer.Top;
+                int nw = w.HasValue ? w.Value + left + right : outer.Right - outer.Left;
+                int nh = h.HasValue ? h.Value + top + bottom : outer.Bottom - outer.Top;
+                uint flags = 0x0004 | 0x0010; // NOZORDER | NOACTIVATE
+                if (!x.HasValue) flags |= 0x0002; // NOMOVE
+                if (!w.HasValue && !h.HasValue) flags |= 0x0001; // NOSIZE
+                // The invisible border is fractional at non-100% scaling, so the first placement
+                // can land a pixel off; measure the visible frame and correct, at most twice.
+                bool placed = false;
+                for (int pass = 0; pass < 3 && !placed; pass++)
+                {
+                    if (!Native.SetWindowPos(window, IntPtr.Zero, nx, ny, nw, nh, flags))
+                        throw new InvalidOperationException("Windows refused to move or resize '" + Native.WindowTitle(window) + "' (an elevated window cannot be arranged from here)");
+                    req.Sleep(pass == 0 ? 120 : 60);
+                    var now = Native.WindowBounds(window);
+                    int dx = x.HasValue ? x.Value - now.Left : 0, dy = y.HasValue ? y.Value - now.Top : 0;
+                    int dw = w.HasValue ? w.Value - (now.Right - now.Left) : 0, dh = h.HasValue ? h.Value - (now.Bottom - now.Top) : 0;
+                    placed = dx == 0 && dy == 0 && dw == 0 && dh == 0;
+                    if (Math.Abs(dx) > 4 || Math.Abs(dy) > 4 || Math.Abs(dw) > 4 || Math.Abs(dh) > 4) break; // the app overrides it; a nudge will not help
+                    nx += dx; ny += dy; nw += dw; nh += dh;
+                }
+                if (!placed) notes.Add("the window settled at " + Win.Bounds(window) + " (the app limits its own size or position)");
+            }
+            else if (show != null)
+            {
+                int cmd = show == "minimize" ? 6 : show == "maximize" ? 3 : 9;
+                // restore undoes one step: a minimized window comes back as it was (possibly
+                // maximized); a maximized one returns to its normal size.
+                bool wasMinimized = Native.IsIconic(window);
+                Native.ShowWindow(window, cmd);
+                var until = DateTime.UtcNow.AddMilliseconds(1000);
+                while (true)
+                {
+                    bool done = show == "minimize" ? Native.IsIconic(window)
+                        : show == "maximize" ? Native.IsZoomed(window)
+                        : !Native.IsIconic(window) && (wasMinimized || !Native.IsZoomed(window));
+                    if (done) break;
+                    if (DateTime.UtcNow >= until) throw new InvalidOperationException("Windows did not " + show + " '" + Native.WindowTitle(window) + "'");
+                    req.Sleep(40);
+                }
+                req.Sleep(150); // let the window finish its animation before the next step reads it
             }
         }
 

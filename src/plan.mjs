@@ -3,12 +3,12 @@
  * server and the PreToolUse hook so the two can never disagree about what is risky.
  */
 
-export const STEP_ACTIONS = ['click', 'doubleClick', 'rightClick', 'middleClick', 'move', 'drag', 'scroll', 'type', 'key', 'focus', 'wait', 'waitFor'];
+export const STEP_ACTIONS = ['click', 'doubleClick', 'rightClick', 'middleClick', 'move', 'drag', 'scroll', 'type', 'key', 'focus', 'wait', 'waitFor', 'window'];
 export const RISKS = ['low', 'medium', 'high'];
 const ORDER = { low: 0, medium: 1, high: 2 };
 const POINTER = new Set(['click', 'doubleClick', 'rightClick', 'middleClick', 'move']);
 /** Fields a step forwards to the engine. */
-export const ACTION_FIELDS = ['x', 'y', 'toX', 'toY', 'amount', 'text', 'key', 'title', 'hwnd', 'button', 'tolerant', 'target', 'role', 'mode', 'expect'];
+export const ACTION_FIELDS = ['x', 'y', 'toX', 'toY', 'amount', 'text', 'key', 'title', 'hwnd', 'button', 'tolerant', 'target', 'role', 'mode', 'expect', 'modifiers', 'width', 'height', 'show'];
 
 /**
  * Validate a batch before anything touches the desktop.
@@ -30,6 +30,9 @@ export function validateSteps(steps, maxSteps) {
 		if (action === 'focus' && typeof step.title !== 'string' && typeof step.hwnd !== 'string') throw new Error(`step ${n} (focus) needs title or hwnd`);
 		if (action === 'wait' && !Number.isInteger(step.ms)) throw new Error(`step ${n} (wait) needs integer ms`);
 		if (action === 'waitFor' && (step.expect === null || typeof step.expect !== 'object')) throw new Error(`step ${n} (waitFor) needs expect, e.g. {exists: 'OK'}`);
+		if (action === 'window' && typeof step.title !== 'string' && typeof step.hwnd !== 'string') throw new Error(`step ${n} (window) needs title or hwnd`);
+		if (action === 'window' && step.show === undefined && step.x === undefined && step.y === undefined && step.width === undefined && step.height === undefined) throw new Error(`step ${n} (window) needs show or x/y/width/height`);
+		if (step.modifiers !== undefined && action === 'move') throw new Error(`step ${n}: modifiers apply to clicks, drags and scroll`);
 		if (step.risk !== undefined && !RISKS.includes(step.risk)) throw new Error(`step ${n} risk must be low, medium or high`);
 		return step;
 	});
@@ -64,6 +67,9 @@ export function describeStep(step, index) {
 	else if (Number.isInteger(step.target)) parts.push(`control #${step.target}`);
 	else if (Number.isInteger(step.x) && Number.isInteger(step.y)) parts.push(`at ${step.x},${step.y}`);
 	if (Number.isInteger(step.toX) && Number.isInteger(step.toY)) parts.push(`to ${step.toX},${step.toY}`);
+	if (step.modifiers !== undefined) parts.push(`with ${Array.isArray(step.modifiers) ? step.modifiers.join('+') : step.modifiers}`);
+	if (Number.isInteger(step.width) || Number.isInteger(step.height)) parts.push(`size ${step.width ?? '?'}x${step.height ?? '?'}`);
+	if (typeof step.show === 'string') parts.push(step.show);
 	if (typeof step.title === 'string') parts.push(`in '${step.title}'`);
 	if (typeof step.key === 'string') parts.push(step.key);
 	if (typeof step.text === 'string') parts.push(JSON.stringify(step.text.length > 60 ? `${step.text.slice(0, 60)}…` : step.text));

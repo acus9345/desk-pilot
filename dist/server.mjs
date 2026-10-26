@@ -17306,11 +17306,11 @@ var Engine = class extends EventEmitter {
 };
 
 // src/plan.mjs
-var STEP_ACTIONS = ["click", "doubleClick", "rightClick", "middleClick", "move", "drag", "scroll", "type", "key", "focus", "wait", "waitFor"];
+var STEP_ACTIONS = ["click", "doubleClick", "rightClick", "middleClick", "move", "drag", "scroll", "type", "key", "focus", "wait", "waitFor", "window"];
 var RISKS = ["low", "medium", "high"];
 var ORDER = { low: 0, medium: 1, high: 2 };
 var POINTER = /* @__PURE__ */ new Set(["click", "doubleClick", "rightClick", "middleClick", "move"]);
-var ACTION_FIELDS = ["x", "y", "toX", "toY", "amount", "text", "key", "title", "hwnd", "button", "tolerant", "target", "role", "mode", "expect"];
+var ACTION_FIELDS = ["x", "y", "toX", "toY", "amount", "text", "key", "title", "hwnd", "button", "tolerant", "target", "role", "mode", "expect", "modifiers", "width", "height", "show"];
 function validateSteps(steps, maxSteps) {
   if (!Array.isArray(steps) || steps.length === 0) throw new Error("desktop_sequence needs at least one step");
   if (steps.length > maxSteps) throw new Error(`desktop_sequence accepts at most ${maxSteps} steps (got ${steps.length}); split the batch`);
@@ -17327,6 +17327,9 @@ function validateSteps(steps, maxSteps) {
     if (action === "focus" && typeof step.title !== "string" && typeof step.hwnd !== "string") throw new Error(`step ${n} (focus) needs title or hwnd`);
     if (action === "wait" && !Number.isInteger(step.ms)) throw new Error(`step ${n} (wait) needs integer ms`);
     if (action === "waitFor" && (step.expect === null || typeof step.expect !== "object")) throw new Error(`step ${n} (waitFor) needs expect, e.g. {exists: 'OK'}`);
+    if (action === "window" && typeof step.title !== "string" && typeof step.hwnd !== "string") throw new Error(`step ${n} (window) needs title or hwnd`);
+    if (action === "window" && step.show === void 0 && step.x === void 0 && step.y === void 0 && step.width === void 0 && step.height === void 0) throw new Error(`step ${n} (window) needs show or x/y/width/height`);
+    if (step.modifiers !== void 0 && action === "move") throw new Error(`step ${n}: modifiers apply to clicks, drags and scroll`);
     if (step.risk !== void 0 && !RISKS.includes(step.risk)) throw new Error(`step ${n} risk must be low, medium or high`);
     return step;
   });
@@ -17354,6 +17357,9 @@ function describeStep(step, index) {
   else if (Number.isInteger(step.target)) parts.push(`control #${step.target}`);
   else if (Number.isInteger(step.x) && Number.isInteger(step.y)) parts.push(`at ${step.x},${step.y}`);
   if (Number.isInteger(step.toX) && Number.isInteger(step.toY)) parts.push(`to ${step.toX},${step.toY}`);
+  if (step.modifiers !== void 0) parts.push(`with ${Array.isArray(step.modifiers) ? step.modifiers.join("+") : step.modifiers}`);
+  if (Number.isInteger(step.width) || Number.isInteger(step.height)) parts.push(`size ${step.width ?? "?"}x${step.height ?? "?"}`);
+  if (typeof step.show === "string") parts.push(step.show);
   if (typeof step.title === "string") parts.push(`in '${step.title}'`);
   if (typeof step.key === "string") parts.push(step.key);
   if (typeof step.text === "string") parts.push(JSON.stringify(step.text.length > 60 ? `${step.text.slice(0, 60)}\u2026` : step.text));
@@ -17396,6 +17402,8 @@ function frameText(f, label = "frame") {
 function actionSummary(a) {
   const parts = [];
   if (a.control) parts.push(a.control);
+  if (a.modifiers) parts.push(`with ${a.modifiers}`);
+  if (a.action === "window" && a.window) parts.push(`window ${quote(a.window.title)} @ ${a.window.bounds}${a.window.maximized ? " maximized" : a.window.minimized ? " minimized" : ""}`);
   if (a.focused) parts.push(`focus ${a.focused}`);
   if (a.foreground) parts.push(`fg ${quote(a.foreground.title)}`);
   const extra = [];
@@ -17407,7 +17415,7 @@ function actionSummary(a) {
 function windowsText(a) {
   const lines = ["<windows>"];
   for (const w of a.windows ?? []) {
-    const flags = [w.foreground ? "foreground" : "", w.minimized ? "minimized" : ""].filter(Boolean).join(",");
+    const flags = [w.foreground ? "foreground" : "", w.minimized ? "minimized" : "", w.maximized ? "maximized" : ""].filter(Boolean).join(",");
     lines.push(`${w.hwnd} ${quote(w.title)} (${w.process ?? "?"}) @ ${w.bounds}${flags ? ` [${flags}]` : ""}`);
   }
   lines.push("</windows>");
@@ -17456,7 +17464,7 @@ function sequenceText(s) {
 }
 
 // src/tools.mjs
-var CONTROL_ACTIONS = ["click", "doubleClick", "rightClick", "middleClick", "move", "drag", "scroll", "type", "key", "focus", "waitFor", "windows", "controls"];
+var CONTROL_ACTIONS = ["click", "doubleClick", "rightClick", "middleClick", "move", "drag", "scroll", "type", "key", "focus", "waitFor", "window", "windows", "controls"];
 var PASSIVE = /* @__PURE__ */ new Set(["windows", "controls", "waitFor"]);
 var expectSchema = {
   type: "object",
@@ -17473,8 +17481,8 @@ var expectSchema = {
   additionalProperties: false
 };
 var actionProps = {
-  x: { type: "integer", description: "Screen x in physical pixels." },
-  y: { type: "integer", description: "Screen y in physical pixels." },
+  x: { type: "integer", description: "Screen x in physical pixels (window: new left edge)." },
+  y: { type: "integer", description: "Screen y in physical pixels (window: new top edge)." },
   toX: { type: "integer", description: "drag end x; nonzero makes scroll horizontal." },
   toY: { type: "integer", description: "drag end y." },
   target: {
@@ -17487,6 +17495,10 @@ var actionProps = {
   key: { type: "string", description: "key: 'enter', 'tab', 'esc', 'f5', 'ctrl+s', 'alt+tab', 'win+r'." },
   amount: { type: "integer", description: "scroll notches, positive is up (default 3)." },
   button: { type: "string", enum: ["left", "right", "middle"] },
+  modifiers: { type: "array", items: { type: "string", enum: ["ctrl", "shift", "alt", "win"] }, description: 'Keys held during a click, drag or scroll (e.g. ["ctrl"] to add to a selection); always released afterwards.' },
+  width: { type: "integer", description: "window: new width of the visible frame." },
+  height: { type: "integer", description: "window: new height." },
+  show: { type: "string", enum: ["minimize", "maximize", "restore"], description: "window: change its state." },
   title: { type: "string", description: "Window title or process substring: input goes to it (brought to front first); focus and controls use it." },
   hwnd: { type: "string", description: "Window handle (0x1094C) instead of title." },
   tolerant: { type: "boolean", description: "focus: note a refused focus instead of failing." },
@@ -17517,7 +17529,7 @@ var TOOLS = [
   {
     name: "desktop_control",
     title: "Desktop control",
-    description: `Operate the live Windows desktop: click, drag, scroll, type, keys, focus, waitFor, list windows, or read a window's UI Automation controls ("index [Role] 'Name' @ x,y WxH"). Click a control by index or name with target instead of guessing pixels. Every input action reports where input went (foreground window, focused control) and type reads the text back; expect makes the result checked. capture: true adds a frame (only what changed, when possible).`,
+    description: `Operate the live Windows desktop: click (with modifiers for ctrl/shift-click), drag, scroll, type, keys, focus, waitFor, move/resize/minimize/maximize/restore a window, list windows, or read a window's UI Automation controls ("index [Role] 'Name' @ x,y WxH"). Click a control by index or name with target instead of guessing pixels. Every input action reports where input went (foreground window, focused control) and type reads the text back; expect makes the result checked. capture: true adds a frame (only what changed, when possible).`,
     inputSchema: {
       type: "object",
       properties: {

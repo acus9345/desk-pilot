@@ -44,10 +44,14 @@ const logFile = join(work, 'log.txt');
 const readyFile = join(work, 'ready.txt');
 writeFileSync(logFile, '', 'utf8');
 const formScript = `
+# Per-monitor DPI aware, like a modern app: Windows then sizes the form in exact
+# physical pixels instead of scaling a 96-DPI window by 1.5.
+Add-Type -Namespace DeskE2e -Name Dpi -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr value);'
+$null = [DeskE2e.Dpi]::SetProcessDpiAwarenessContext([IntPtr]::new(-4))
 Add-Type -AssemblyName System.Windows.Forms
 $log = '${logFile}'
 function W([string] $m) { [System.IO.File]::AppendAllText($log, $m + [char]10, (New-Object System.Text.UTF8Encoding($false))) }
-function B([string] $text, [int] $x, [int] $y) { $b = New-Object System.Windows.Forms.Button; $b.Text = $text; $b.Location = New-Object System.Drawing.Point($x, $y); $b.Width = 96; $b.Add_Click({ W ('click ' + $this.Text) }.GetNewClosure()); $form.Controls.Add($b); return $b }
+function B([string] $text, [int] $x, [int] $y) { $b = New-Object System.Windows.Forms.Button; $b.Text = $text; $b.Location = New-Object System.Drawing.Point($x, $y); $b.Width = 96; $b.Add_Click({ $m = [System.Windows.Forms.Control]::ModifierKeys; if ($m -ne 'None') { W ('click ' + $this.Text + ' mods=' + $m) } else { W ('click ' + $this.Text) } }.GetNewClosure()); $form.Controls.Add($b); return $b }
 $form = New-Object System.Windows.Forms.Form
 $form.Text = '${title}'
 $form.StartPosition = 'Manual'
@@ -292,6 +296,46 @@ try {
 }
 await sleep(4000);
 check('a cancelled call rejects and its batch stops', cancelError !== undefined && !log().slice(before).some((l) => l.includes('CANCELLED')), cancelError?.message);
+
+// modifier clicks: held for the click, released afterwards
+before = log().length;
+const ctrlClick = await call(a.client, 'desktop_control', { action: 'click', title, target: 'Alpha', modifiers: ['ctrl'] });
+await call(a.client, 'desktop_control', { action: 'click', title, target: 'Alpha', modifiers: ['shift'] });
+await call(a.client, 'desktop_sequence', { steps: [{ action: 'click', title, target: 'Alpha', modifiers: ['ctrl', 'shift'] }, { action: 'click', title, target: 'Alpha' }], capture: 'none' });
+await sleep(300);
+const modLog = log().slice(before);
+check('ctrl+click reaches the control with ctrl held', modLog.includes('click Alpha mods=Control') && /with ctrl/u.test(textOf(ctrlClick)), modLog.join(' | '));
+check('shift+click and ctrl+shift+click too', modLog.includes('click Alpha mods=Shift') && modLog.includes('click Alpha mods=Shift, Control'));
+check('modifiers are released afterwards (the next plain click has none)', modLog.at(-1) === 'click Alpha', modLog.at(-1));
+const badMods = await call(a.client, 'desktop_control', { action: 'move', x: 10, y: 10, modifiers: ['ctrl'] });
+check('modifiers on a move are refused', badMods.isError === true && /modifiers apply to clicks/u.test(textOf(badMods)));
+
+// window: move/resize the visible frame, then maximize, minimize and restore
+const boundsOf = async () => textOf(await call(a.client, 'desktop_control', { action: 'windows', title })).split('\n').find((l) => l.includes(title)) ?? '';
+// The throwaway form runs in DPI-unaware Windows PowerShell, so at 150% scaling Windows
+// can only give it widths in 1.5-pixel steps: accept 2 px of slack, but only when the
+// result says so instead of claiming the exact size.
+const frameOf = (line) => (line.match(/@ (-?\d+),(-?\d+),(\d+),(\d+)/u) ?? []).slice(1).map(Number);
+const near = (line, [x, y, w, h]) => {
+	const [bx, by, bw, bh] = frameOf(line);
+	return bx === x && by === y && Math.abs(bw - w) <= 2 && Math.abs(bh - h) <= 2;
+};
+const exact = (line, [x, y, w, h]) => line.includes(`@ ${x},${y},${w},${h}`);
+const placed = await call(a.client, 'desktop_control', { action: 'window', title, x: 200, y: 180, width: 900, height: 480 });
+const placedAt = await boundsOf();
+check('window moves and resizes the visible frame, and says so when the app snaps it', !placed.isError && near(placedAt, [200, 180, 900, 480]) && (exact(placedAt, [200, 180, 900, 480]) || /the window settled at/u.test(textOf(placed))), `${placedAt} | ${textOf(placed).split('\n').slice(1).join(' ')}`);
+await call(a.client, 'desktop_control', { action: 'window', title, show: 'maximize' });
+check('maximize', (await boundsOf()).includes('maximized'), await boundsOf());
+await call(a.client, 'desktop_control', { action: 'window', title, show: 'minimize' });
+check('minimize', (await boundsOf()).includes('minimized'), await boundsOf());
+await call(a.client, 'desktop_control', { action: 'window', title, show: 'restore' });
+check('restore from minimized brings it back maximized', (await boundsOf()).includes('maximized'), await boundsOf());
+await call(a.client, 'desktop_control', { action: 'window', title, show: 'restore' });
+check('restore again returns it to its normal frame', (await boundsOf()).includes(`@ ${frameOf(placedAt).join(',')}`) && !/maximized|minimized/u.test(await boundsOf()), await boundsOf());
+const inBatch = await call(a.client, 'desktop_sequence', { steps: [{ action: 'window', title, x: 140, y: 140 }, { action: 'click', title, target: 'Alpha' }], capture: 'none' });
+check('window works as a batch step, and controls still resolve after the move', /done=2\/2/u.test(textOf(inBatch)) && (await boundsOf()).includes(`@ 140,140,${frameOf(placedAt)[2]},${frameOf(placedAt)[3]}`), textOf(inBatch).split('\n').slice(1, 3).join(' | '));
+const noArgs = await call(a.client, 'desktop_control', { action: 'window', title });
+check('window with nothing to do is refused', noArgs.isError === true && /needs show/u.test(textOf(noArgs)));
 
 // warm latency
 const moveTimes = [];
