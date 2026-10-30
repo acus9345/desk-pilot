@@ -40,9 +40,15 @@ namespace DeskPilot
             return i;
         }
 
+        /// <summary>Put the pointer on a point with a real move event, then let the app notice it.
+        /// XAML apps such as Paint track the pointer from input, so after SetCursorPos alone they
+        /// still believe it is where it was, and spend the next press on catching up.</summary>
         public static void MoveTo(int x, int y)
         {
-            if (!Native.SetCursorPos(x, y)) throw new InvalidOperationException("the pointer could not be moved to " + x + "," + y);
+            Slide(new Point(x, y));
+            POINT now;
+            if (Native.GetCursorPos(out now) && (now.X != x || now.Y != y) && !Native.SetCursorPos(x, y))
+                throw new InvalidOperationException("the pointer could not be moved to " + x + "," + y);
         }
 
         static INPUT Button(string button, bool down)
@@ -57,18 +63,26 @@ namespace DeskPilot
             }
         }
 
+        // As long as a quick human press. A press and release in one instant is missed by canvases
+        // that sample input once per frame.
+        const int PressMs = 40, ArriveMs = 25;
+
+        /// <summary>Move, give the app a moment to see the pointer arrive, click.</summary>
+        public static void ClickAt(int x, int y, string button, int count, int holdMs, Request req)
+        {
+            MoveTo(x, y);
+            Thread.Sleep(ArriveMs);
+            Click(button, count, holdMs, req);
+        }
+
         public static void Click(string button, int count, int holdMs, Request req)
         {
             for (int i = 0; i < count; i++)
             {
                 req.Check();
-                if (holdMs > 0)
-                {
-                    Send(Button(button, true));
-                    try { req.Sleep(holdMs); }
-                    finally { Send(Button(button, false)); }
-                }
-                else Send(Button(button, true), Button(button, false));
+                Send(Button(button, true));
+                try { req.Sleep(holdMs > 0 ? holdMs : PressMs); }
+                finally { Send(Button(button, false)); }
                 if (i + 1 < count) Thread.Sleep(45);
             }
         }
@@ -156,7 +170,7 @@ namespace DeskPilot
         static void Stroke(List<Point> path, string button, int dwellMs, int ms, Request req)
         {
             MoveTo(path[0].X, path[0].Y);
-            Thread.Sleep(15);
+            Thread.Sleep(ArriveMs);
             Send(Button(button, true));
             try
             {

@@ -17009,11 +17009,12 @@ import { join as join2 } from "node:path";
 import { spawn, execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 var ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 var ENGINE_DIR = join(ROOT, "engine");
+var KEEP_OLD_ENGINE_MS = 7 * 24 * 60 * 60 * 1e3;
 var REFERENCES = ["System.Drawing.dll", "System.Windows.Forms.dll", "UIAutomationClient.dll", "UIAutomationTypes.dll", "WindowsBase.dll", "System.Web.Extensions.dll"];
 function frameworkDir() {
   const windir = process.env.WINDIR ?? process.env.SystemRoot ?? "C:\\Windows";
@@ -17024,6 +17025,7 @@ function frameworkDir() {
   return void 0;
 }
 async function ensureEngine(dataDir) {
+  if (!existsSync(ENGINE_DIR)) throw new Error("desk-pilot was updated and this session's copy is gone; restart Claude Code to load the new version");
   const sources = readdirSync(ENGINE_DIR).filter((name) => name.endsWith(".cs")).sort();
   const hash = createHash("sha256");
   for (const name of sources) hash.update(name).update(readFileSync(join(ENGINE_DIR, name)));
@@ -17052,7 +17054,7 @@ async function ensureEngine(dataDir) {
   for (const old of readdirSync(dir)) {
     if (old.startsWith("desk-engine-") && old.endsWith(".exe") && join(dir, old) !== exe) {
       try {
-        rmSync(join(dir, old), { force: true });
+        if (Date.now() - statSync(join(dir, old)).mtimeMs > KEEP_OLD_ENGINE_MS) rmSync(join(dir, old), { force: true });
       } catch {
       }
     }
@@ -17074,6 +17076,7 @@ var Engine = class extends EventEmitter {
     this.child = void 0;
     this.starting = void 0;
     this.exe = void 0;
+    this.exePath = void 0;
     this.waiters = /* @__PURE__ */ new Map();
     this.sequence = 0;
     this.queue = Promise.resolve();
@@ -17086,11 +17089,17 @@ var Engine = class extends EventEmitter {
   pid() {
     return this.child?.pid;
   }
-  /** The compiled engine, compiled at most once per process (a failed compile is retried on the next call). */
+  /** The compiled engine, compiled once per process unless the file goes away (a failed compile is retried on the next call). */
   executable() {
+    if (this.exePath !== void 0 && !existsSync(this.exePath)) {
+      this.exe = void 0;
+      this.exePath = void 0;
+    }
     if (this.exe === void 0) {
       this.exe = ensureEngine(this.dataDir);
-      this.exe.catch(() => {
+      this.exe.then((path) => {
+        this.exePath = path;
+      }, () => {
         this.exe = void 0;
       });
     }
@@ -17808,7 +17817,7 @@ var INSTRUCTIONS = "Windows desktop control. Read controls, act by name or index
 var config2 = settings();
 var engine = new Engine(config2);
 var handlers = createHandlers(engine, config2);
-var server = new Server({ name: "desk-pilot", version: "0.3.1" }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });
+var server = new Server({ name: "desk-pilot", version: "0.3.2" }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
 server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
   const handler = handlers[request.params.name];

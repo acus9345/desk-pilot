@@ -79,7 +79,7 @@ namespace DeskPilot
                             control = Resolve(p, window);
                             EnsureFront(window, req);
                             // Focus the control itself; a click could also move a caret or open a menu.
-                            try { control.Element.SetFocus(); } catch { Input.MoveTo(Uia.PointOf(control).X, Uia.PointOf(control).Y); Input.Click("left", 1, 0, req); }
+                            try { control.Element.SetFocus(); } catch { Input.ClickAt(Uia.PointOf(control).X, Uia.PointOf(control).Y, "left", 1, 0, req); }
                             req.Sleep(60);
                             r["control"] = Uia.Describe(control);
                         }
@@ -274,11 +274,11 @@ namespace DeskPilot
                     if (durationMs != null || Input.ButtonHeld) Input.Glide(x.Value, y.Value, durationMs, req);
                     else Input.MoveTo(x.Value, y.Value);
                     break;
-                case "click": Input.MoveTo(x.Value, y.Value); Input.Click(button, 1, holdMs, req); break;
-                case "doubleClick": Input.MoveTo(x.Value, y.Value); Input.Click(button, 2, holdMs, req); break;
-                case "tripleClick": Input.MoveTo(x.Value, y.Value); Input.Click(button, 3, holdMs, req); break;
-                case "rightClick": Input.MoveTo(x.Value, y.Value); Input.Click("right", 1, holdMs, req); break;
-                case "middleClick": Input.MoveTo(x.Value, y.Value); Input.Click("middle", 1, holdMs, req); break;
+                case "click": Input.ClickAt(x.Value, y.Value, button, 1, holdMs, req); break;
+                case "doubleClick": Input.ClickAt(x.Value, y.Value, button, 2, holdMs, req); break;
+                case "tripleClick": Input.ClickAt(x.Value, y.Value, button, 3, holdMs, req); break;
+                case "rightClick": Input.ClickAt(x.Value, y.Value, "right", 1, holdMs, req); break;
+                case "middleClick": Input.ClickAt(x.Value, y.Value, "middle", 1, holdMs, req); break;
                 case "down":
                     if (x != null) Input.MoveTo(x.Value, y.Value);
                     Input.HoldButton(button, Ms(p, "holdMs", MaxHoldMs) ?? DefaultHoldMs);

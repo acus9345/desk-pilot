@@ -1,7 +1,7 @@
 import { spawn, execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -20,6 +20,8 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const ENGINE_DIR = join(ROOT, 'engine');
+/** An older engine can belong to a session still open on the previous plugin version. */
+const KEEP_OLD_ENGINE_MS = 7 * 24 * 60 * 60 * 1000;
 const REFERENCES = ['System.Drawing.dll', 'System.Windows.Forms.dll', 'UIAutomationClient.dll', 'UIAutomationTypes.dll', 'WindowsBase.dll', 'System.Web.Extensions.dll'];
 
 function frameworkDir() {
@@ -37,6 +39,7 @@ function frameworkDir() {
  * @returns the engine's path.
  */
 export async function ensureEngine(dataDir) {
+	if (!existsSync(ENGINE_DIR)) throw new Error('desk-pilot was updated and this session\'s copy is gone; restart Claude Code to load the new version');
 	const sources = readdirSync(ENGINE_DIR).filter((name) => name.endsWith('.cs')).sort();
 	const hash = createHash('sha256');
 	for (const name of sources) hash.update(name).update(readFileSync(join(ENGINE_DIR, name)));
@@ -66,7 +69,7 @@ export async function ensureEngine(dataDir) {
 	for (const old of readdirSync(dir)) {
 		if (old.startsWith('desk-engine-') && old.endsWith('.exe') && join(dir, old) !== exe) {
 			try {
-				rmSync(join(dir, old), { force: true });
+				if (Date.now() - statSync(join(dir, old)).mtimeMs > KEEP_OLD_ENGINE_MS) rmSync(join(dir, old), { force: true });
 			} catch {
 				// An older engine still running in another session keeps its file.
 			}
@@ -92,6 +95,7 @@ export class Engine extends EventEmitter {
 		this.child = undefined;
 		this.starting = undefined;
 		this.exe = undefined;
+		this.exePath = undefined;
 		this.waiters = new Map();
 		this.sequence = 0;
 		this.queue = Promise.resolve();
@@ -106,11 +110,17 @@ export class Engine extends EventEmitter {
 		return this.child?.pid;
 	}
 
-	/** The compiled engine, compiled at most once per process (a failed compile is retried on the next call). */
+	/** The compiled engine, compiled once per process unless the file goes away (a failed compile is retried on the next call). */
 	executable() {
+		if (this.exePath !== undefined && !existsSync(this.exePath)) {
+			this.exe = undefined;
+			this.exePath = undefined;
+		}
 		if (this.exe === undefined) {
 			this.exe = ensureEngine(this.dataDir);
-			this.exe.catch(() => {
+			this.exe.then((path) => {
+				this.exePath = path;
+			}, () => {
 				this.exe = undefined;
 			});
 		}

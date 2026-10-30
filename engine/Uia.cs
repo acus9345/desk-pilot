@@ -231,7 +231,7 @@ namespace DeskPilot
             var pool = exact.Count > 0 ? exact : all.Where(n => roleOk(n) && needle.Length > 0 && Win.Clean(n.Name).Contains(needle)).ToList();
             if (pool.Count == 0)
             {
-                var what = string.IsNullOrWhiteSpace(role) ? "control" : role + " ";
+                var what = string.IsNullOrWhiteSpace(role) ? "control " : role + " ";
                 throw new ArgumentException("no " + what + "named '" + name + "' in '" + Native.WindowTitle(window) + "'; read controls to see what is there");
             }
             var visible = pool.Where(n => !n.Offscreen && !n.Box.IsEmpty && n.Box.Width > 0).ToList();

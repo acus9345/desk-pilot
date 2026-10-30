@@ -9,7 +9,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,6 +43,7 @@ const thiefTitle = `desk-thief ${stamp}`;
 const canvasTitle = `desk-canvas ${stamp}`;
 const logFile = join(work, 'log.txt');
 const readyFile = join(work, 'ready.txt');
+const rawFile = join(work, 'raw.txt');
 writeFileSync(logFile, '', 'utf8');
 const formScript = `
 # Per-monitor DPI aware, like a modern app: Windows then sizes the form in exact
@@ -50,6 +51,20 @@ const formScript = `
 Add-Type -Namespace DeskE2e -Name Dpi -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr value);'
 $null = [DeskE2e.Dpi]::SetProcessDpiAwarenessContext([IntPtr]::new(-4))
 Add-Type -AssemblyName System.Windows.Forms
+# Counts raw mouse input, which real input events reach and SetCursorPos does not.
+Add-Type -ReferencedAssemblies System.Windows.Forms -TypeDefinition @'
+using System; using System.Runtime.InteropServices; using System.Windows.Forms;
+namespace DeskE2e { public class Raw : NativeWindow {
+	[StructLayout(LayoutKind.Sequential)] struct D { public ushort Page, Usage; public uint Flags; public IntPtr Target; }
+	[DllImport("user32.dll")] static extern bool RegisterRawInputDevices(D[] d, uint n, uint s);
+	public int Count;
+	public Raw() { CreateHandle(new CreateParams()); var d = new D { Page = 1, Usage = 2, Flags = 0x100, Target = Handle }; RegisterRawInputDevices(new[] { d }, 1, (uint)Marshal.SizeOf(typeof(D))); }
+	protected override void WndProc(ref Message m) { if (m.Msg == 0xFF) Count++; base.WndProc(ref m); }
+} }
+'@
+$raw = New-Object DeskE2e.Raw
+$rawTimer = New-Object System.Windows.Forms.Timer; $rawTimer.Interval = 100
+$rawTimer.Add_Tick({ [System.IO.File]::WriteAllText('${rawFile}', [string]$raw.Count) }); $rawTimer.Start()
 $log = '${logFile}'
 function W([string] $m) { [System.IO.File]::AppendAllText($log, $m + [char]10, (New-Object System.Text.UTF8Encoding($false))) }
 function B([string] $text, [int] $x, [int] $y) { $b = New-Object System.Windows.Forms.Button; $b.Text = $text; $b.Location = New-Object System.Drawing.Point($x, $y); $b.Width = 96; $b.Add_Click({ $m = [System.Windows.Forms.Control]::ModifierKeys; if ($m -ne 'None') { W ('click ' + $this.Text + ' mods=' + $m) } else { W ('click ' + $this.Text) } }.GetNewClosure()); $form.Controls.Add($b); return $b }
@@ -549,6 +564,20 @@ check('and taking that click did not steal the foreground', /\[foreground/u.test
 await bar.client.close();
 await sleep(300);
 
+// input an app can notice: Paint lost the press after a move and instant clicks before these
+const rawCount = () => (existsSync(rawFile) ? Number(readFileSync(rawFile, 'utf8')) : 0);
+await sleep(300);
+const rawBefore = rawCount();
+await call(a.client, 'desktop_control', { action: 'move', x: padCentre[0] + 30, y: padCentre[1] + 30 });
+await sleep(350);
+check('a plain move is a real input event, which raw-input apps see', rawCount() > rawBefore, `${rawBefore} -> ${rawCount()}`);
+before = log().length;
+await call(a.client, 'desktop_control', { action: 'click', title: canvasTitle, x: padCentre[0], y: padCentre[1] });
+await sleep(250);
+check('a plain click stays down long enough to be sampled', heldMsOf(strokeLines(before)[0] ?? '') >= 15, strokeLines(before)[0]?.split(' pts=')[0]);
+const noSuch = await call(a.client, 'desktop_control', { action: 'click', title: canvasTitle, target: 'Nothing here' });
+check('a missing control is named in readable words', noSuch.isError === true && /no control named 'Nothing here'/u.test(textOf(noSuch)), textOf(noSuch).slice(0, 110));
+
 // warm latency
 const moveTimes = [];
 for (let i = 0; i < 10; i += 1) moveTimes.push((await timed(() => call(a.client, 'desktop_control', { action: 'move', x: 300 + i * 4, y: 600 }))).ms);
@@ -605,6 +634,21 @@ const lostUp = strokeLines(before).length;
 await call(b.client, 'desktop_control', { action: 'move', x: 500, y: 500 });
 await sleep(300);
 check('a hold orphaned by a killed engine is released by the next engine', lostUp === 0 && strokeLines(before).length === 1, `${strokeLines(before).length} up after restart`);
+
+// a plugin update replaced the engine file under a running session
+const engineDir = join(work, 'data-hold', 'engine');
+const engineFile = () => readdirSync(engineDir).find((name) => /^desk-engine-[0-9a-f]{12}\.exe$/u.test(name));
+const current = engineFile();
+writeFileSync(join(engineDir, 'desk-engine-aaaaaaaaaaaa.exe'), 'another session');
+writeFileSync(join(engineDir, 'desk-engine-bbbbbbbbbbbb.exe'), 'long gone');
+const longAgo = new Date(Date.now() - 8 * 86400000);
+utimesSync(join(engineDir, 'desk-engine-bbbbbbbbbbbb.exe'), longAgo, longAgo);
+kill(enginePids(b.transport.pid)[0]);
+await sleep(400);
+rmSync(join(engineDir, current));
+const rebuilt = await call(b.client, 'desktop_control', { action: 'move', x: 500, y: 520 });
+check('when its engine file disappears, the server compiles it again', !rebuilt.isError && existsSync(join(engineDir, current)), textOf(rebuilt).split('\n')[0]);
+check('a recent engine from another session is kept, an old one removed', existsSync(join(engineDir, 'desk-engine-aaaaaaaaaaaa.exe')) && !existsSync(join(engineDir, 'desk-engine-bbbbbbbbbbbb.exe')));
 await b.client.close();
 
 kill(Number(windowPid));
