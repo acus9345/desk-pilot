@@ -97,99 +97,6 @@ namespace DeskPilot
         }
     }
 
-    /// <summary>The "who is driving" banner. Never activates, never takes clicks, and is
-    /// excluded from screen capture so it never appears in a frame the model reads.</summary>
-    public class Banner : Form
-    {
-        readonly Label label;
-        readonly System.Windows.Forms.Timer hideTimer;
-        bool hotkey;
-        public bool CaptureExcluded;
-
-        public Banner(string caption)
-        {
-            FormBorderStyle = FormBorderStyle.None;
-            ShowInTaskbar = false;
-            TopMost = true;
-            StartPosition = FormStartPosition.Manual;
-            BackColor = Color.FromArgb(28, 28, 32);
-            Opacity = 0.9;
-            label = new Label();
-            label.AutoSize = true;
-            label.ForeColor = Color.White;
-            label.BackColor = Color.Transparent;
-            label.Text = caption;
-            Controls.Add(label);
-            hideTimer = new System.Windows.Forms.Timer();
-            hideTimer.Interval = 2000;
-            hideTimer.Tick += delegate { hideTimer.Stop(); HideNow(); };
-        }
-
-        protected override bool ShowWithoutActivation { get { return true; } }
-
-        protected override CreateParams CreateParams
-        {
-            get
-            {
-                var cp = base.CreateParams;
-                // NOACTIVATE | TOOLWINDOW | TRANSPARENT (click-through) | TOPMOST
-                cp.ExStyle |= 0x08000000 | 0x00000080 | 0x00000020 | 0x00000008;
-                return cp;
-            }
-        }
-
-        protected override void WndProc(ref Message m)
-        {
-            if (m.Msg == 0x0312 && m.WParam.ToInt32() == 1) Program.OnEsc();
-            base.WndProc(ref m);
-        }
-
-        void Place()
-        {
-            var screen = Screen.PrimaryScreen.Bounds;
-            float px = Math.Max(18f, screen.Height / 42f);
-            label.Font = new Font("Microsoft YaHei UI", px, FontStyle.Bold, GraphicsUnit.Pixel);
-            int padX = (int)(px * 1.1), padY = (int)(px * 0.45);
-            var size = label.PreferredSize;
-            label.Location = new Point(padX, padY);
-            Size = new Size(size.Width + padX * 2, size.Height + padY * 2);
-            Location = new Point(screen.Left + (screen.Width - Width) / 2, screen.Top + (int)(px * 0.8));
-            int r = (int)(px * 0.7);
-            var path = new System.Drawing.Drawing2D.GraphicsPath();
-            path.AddArc(0, 0, r, r, 180, 90);
-            path.AddArc(Width - r, 0, r, r, 270, 90);
-            path.AddArc(Width - r, Height - r, r, r, 0, 90);
-            path.AddArc(0, Height - r, r, r, 90, 90);
-            path.CloseFigure();
-            Region = new Region(path);
-        }
-
-        public void ShowBanner()
-        {
-            hideTimer.Stop();
-            if (Visible) return;
-            Place();
-            Show();
-            // WDA_EXCLUDEFROMCAPTURE (Windows 10 2004+): the banner stays out of every frame.
-            CaptureExcluded = Native.SetWindowDisplayAffinity(Handle, 0x11);
-            if (!hotkey) hotkey = Native.RegisterHotKey(Handle, 1, 0x4000, 0x1B);
-        }
-
-        public void HideSoon()
-        {
-            if (!Visible) return;
-            hideTimer.Stop();
-            hideTimer.Start();
-        }
-
-        public void HideNow()
-        {
-            hideTimer.Stop();
-            if (hotkey) { Native.UnregisterHotKey(Handle, 1); hotkey = false; }
-            if (Visible) Hide();
-        }
-    }
-
     public static class Program
     {
         public static JavaScriptSerializer Json;
@@ -205,17 +112,20 @@ namespace DeskPilot
         public static int Main(string[] args)
         {
             Dpi = Native.MakeDpiAware();
+            Input.ReleaseOrphans();
+            AppDomain.CurrentDomain.ProcessExit += delegate { Input.LetGoAll(); };
             Json = new JavaScriptSerializer();
             Json.MaxJsonLength = int.MaxValue;
             Json.RecursionLimit = 64;
             output = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false));
             var input = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false));
 
-            string caption = "Claude is operating this computer · Press Esc to cancel";
-            bool once = false;
+            string caption = "Claude is in control · Esc to stop";
+            bool once = false, inFrames = false;
             for (int i = 0; i < args.Length; i++)
             {
                 if (args[i] == "--once") once = true;
+                if (args[i] == "--overlay-in-frames") inFrames = true;
                 if (args[i] == "--caption" && i + 1 < args.Length)
                 {
                     try { caption = Encoding.UTF8.GetString(Convert.FromBase64String(args[i + 1])); } catch { }
@@ -234,8 +144,7 @@ namespace DeskPilot
                 return 0;
             }
 
-            Banner = new Banner(caption);
-            var handle = Banner.Handle; // create it on this thread so Invoke works before first show
+            Banner = new Banner(caption, inFrames); // created on this thread so Invoke works before first show
 
             var executor = new Thread(ExecuteLoop);
             executor.IsBackground = true;
@@ -337,13 +246,15 @@ namespace DeskPilot
             }
             catch (StopException e)
             {
+                Input.LetGoAll();
                 result = Fail(e.Message);
                 result["cancelled"] = true;
                 if (req.Esc) result["esc"] = true;
             }
             catch (Exception e)
             {
-                result = Fail(e.Message);
+                var held = Input.Held();
+                result = Fail(held == null ? e.Message : e.Message + " (still holding " + held + "; up releases it)");
             }
             result["id"] = req.Id;
             return result;
@@ -373,11 +284,27 @@ namespace DeskPilot
         {
             var running = current;
             if (running != null) { running.Esc = true; running.Cancelled = true; }
+            Input.LetGoAll();
             var e = new Dictionary<string, object>();
             e["event"] = "esc";
             e["at"] = DateTime.UtcNow.ToString("o");
             Write(e);
             if (Banner != null) Banner.HideNow();
+        }
+
+        /// <summary>Text beside the pointer for this action, or none.</summary>
+        public static void ShowLabel(string text)
+        {
+            if (Banner == null) return;
+            try { Banner.BeginInvoke((Action)delegate { Banner.ShowLabel(text); }); }
+            catch { }
+        }
+
+        public static void PinBanner(bool pin)
+        {
+            if (Banner == null) return;
+            try { Banner.BeginInvoke((Action)delegate { Banner.Pinned = pin; if (!pin) Banner.HideSoon(); }); }
+            catch { }
         }
 
         /// <summary>Run on the STA message thread (clipboard), or inline in once-mode.</summary>

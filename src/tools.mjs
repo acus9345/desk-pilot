@@ -2,135 +2,120 @@ import { ACTION_FIELDS, RISKS, STEP_ACTIONS, describeStep, gate, validateSteps }
 import { actionText, frameText, sequenceText } from './format.mjs';
 
 /**
- * The three tools. Descriptions stay short (they load with every schema); the longer
- * how-to lives in the plugin's skill.
+ * The three tools. Every word here is paid for in every session that loads them, so
+ * obvious fields carry no description and steps do not repeat desktop_control's fields;
+ * the how-to lives in the plugin's skill.
  */
 
-const CONTROL_ACTIONS = ['click', 'doubleClick', 'rightClick', 'middleClick', 'move', 'drag', 'scroll', 'type', 'key', 'focus', 'waitFor', 'window', 'windows', 'controls'];
+const CONTROL_ACTIONS = ['click', 'doubleClick', 'tripleClick', 'rightClick', 'middleClick', 'move', 'drag', 'draw', 'down', 'up', 'scroll', 'type', 'key', 'focus', 'waitFor', 'window', 'windows', 'controls'];
 const PASSIVE = new Set(['windows', 'controls', 'waitFor']);
 
 const expectSchema = {
 	type: 'object',
-	description: 'Conditions that must hold after the action (polled until timeoutMs, default 1500; 5000 for waitFor). The step fails if they do not.',
+	description: 'Must hold after the action or the step fails; polled up to timeoutMs (1500, waitFor 5000). exists/gone name a control.',
 	properties: {
-		window: { type: 'string', description: 'A window with this title exists.' },
-		foreground: { type: 'string', description: 'The window in front has this title.' },
-		focused: { type: 'string', description: 'The focused control has this name.' },
-		value: { type: 'string', description: 'The focused control contains this text.' },
-		exists: { type: 'string', description: 'A control with this name is on screen (in the step window, else the front one).' },
-		gone: { type: 'string', description: 'No control with this name is on screen.' },
+		window: { type: 'string' },
+		foreground: { type: 'string' },
+		focused: { type: 'string' },
+		value: { type: 'string' },
+		exists: { type: 'string' },
+		gone: { type: 'string' },
 		timeoutMs: { type: 'integer' }
 	},
 	additionalProperties: false
 };
 
-const actionProps = {
-	x: { type: 'integer', description: 'Screen x in physical pixels (window: new left edge).' },
-	y: { type: 'integer', description: 'Screen y in physical pixels (window: new top edge).' },
-	toX: { type: 'integer', description: 'drag end x; nonzero makes scroll horizontal.' },
-	toY: { type: 'integer', description: 'drag end y.' },
-	target: {
-		anyOf: [{ type: 'integer' }, { type: 'string' }],
-		description: 'A control instead of x/y: an index from the last controls listing, or a control name (exact beats partial; add role if ambiguous). Disabled controls are refused.'
-	},
-	role: { type: 'string', description: 'With a name target: Button, Edit, CheckBox, MenuItem, ListItem, TabItem...' },
-	text: { type: 'string', description: 'type: the text.' },
-	mode: { type: 'string', enum: ['paste', 'keys'], description: "type: 'paste' (default, one insertion, clipboard restored) or 'keys' (Unicode keystrokes)." },
-	key: { type: 'string', description: "key: 'enter', 'tab', 'esc', 'f5', 'ctrl+s', 'alt+tab', 'win+r'." },
-	amount: { type: 'integer', description: 'scroll notches, positive is up (default 3).' },
-	button: { type: 'string', enum: ['left', 'right', 'middle'] },
-	modifiers: { type: 'array', items: { type: 'string', enum: ['ctrl', 'shift', 'alt', 'win'] }, description: 'Keys held during a click, drag or scroll (e.g. ["ctrl"] to add to a selection); always released afterwards.' },
-	width: { type: 'integer', description: 'window: new width of the visible frame.' },
-	height: { type: 'integer', description: 'window: new height.' },
-	show: { type: 'string', enum: ['minimize', 'maximize', 'restore'], description: 'window: change its state.' },
-	title: { type: 'string', description: 'Window title or process substring: input goes to it (brought to front first); focus and controls use it.' },
-	hwnd: { type: 'string', description: 'Window handle (0x1094C) instead of title.' },
-	tolerant: { type: 'boolean', description: 'focus: note a refused focus instead of failing.' },
-	expect: expectSchema
-};
-
 export const TOOLS = [
 	{
 		name: 'screen_view',
-		title: 'View screen',
-		description: 'See the live Windows desktop as a real image (per-monitor DPI aware, coordinate rulers in screen pixels). Defaults to the primary monitor; window frames one window (any window, by title or hwnd), region crops, screen "all" spans every monitor. An unchanged frame is not re-sent; diff sends only the changed region.',
+		description: 'See the real Windows screen as an image. Default: primary monitor. Unchanged frames are not re-sent. Prefer desktop_control controls when you only need what is on screen.',
 		inputSchema: {
 			type: 'object',
 			properties: {
-				screen: { type: 'string', description: "'primary' (default), 'all', or a monitor index." },
-				window: { type: 'string', description: 'Window title or process substring.' },
-				hwnd: { type: 'string', description: 'Window handle.' },
-				region: { type: 'string', description: "'x,y,width,height' in screen pixels - also the way to zoom in." },
-				diff: { type: 'boolean', description: 'Send only the region that changed since your last frame of this area.' },
-				maxEdge: { type: 'integer', description: 'Longest image side in pixels (default 1568); smaller is cheaper.' },
-				includeCursor: { type: 'boolean', description: 'Mark the pointer (default true).' },
-				rulers: { type: 'boolean', description: 'Coordinate rulers (default true).' },
-				forceImage: { type: 'boolean', description: 'Send the full frame even if unchanged.' }
+				screen: { type: 'string', description: "'primary', 'all' or a monitor index." },
+				window: { type: 'string', description: 'Title or process substring.' },
+				hwnd: { type: 'string' },
+				region: { type: 'string', description: "'x,y,w,h' in screen pixels; use it to zoom in." },
+				diff: { type: 'boolean', description: 'Only what changed since your last frame of this area.' },
+				maxEdge: { type: 'integer' },
+				includeCursor: { type: 'boolean' },
+				rulers: { type: 'boolean' },
+				forceImage: { type: 'boolean', description: 'Re-send an unchanged frame.' }
 			},
 			additionalProperties: false
 		},
-		annotations: { title: 'View screen', readOnlyHint: true, openWorldHint: false }
+		annotations: { readOnlyHint: true, openWorldHint: false }
 	},
 	{
 		name: 'desktop_control',
-		title: 'Desktop control',
-		description: 'Operate the live Windows desktop: click (with modifiers for ctrl/shift-click), drag, scroll, type, keys, focus, waitFor, move/resize/minimize/maximize/restore a window, list windows, or read a window\'s UI Automation controls ("index [Role] \'Name\' @ x,y WxH"). Click a control by index or name with target instead of guessing pixels. Every input action reports where input went (foreground window, focused control) and type reads the text back; expect makes the result checked. capture: true adds a frame (only what changed, when possible).',
+		description: 'Act on the real Windows desktop, or read it (windows, controls). x/y are physical screen pixels. Use target instead of pixels whenever a control exists. Results say where input went; type is read back.',
 		inputSchema: {
 			type: 'object',
 			properties: {
 				action: { type: 'string', enum: CONTROL_ACTIONS },
-				...actionProps,
-				meaningfulOnly: { type: 'boolean', description: 'controls: only operable, on-screen controls (default true).' },
-				includeValues: { type: 'boolean', description: 'controls: include values (passwords masked).' },
-				settleMs: { type: 'integer', description: 'Wait after acting (default 0; with capture, the frame waits until the screen stops changing, up to this).' },
-				capture: { type: 'boolean', description: 'Return a frame after acting (default false).' },
+				x: { type: 'integer' },
+				y: { type: 'integer' },
+				toX: { type: 'integer', description: 'drag end; nonzero makes scroll horizontal.' },
+				toY: { type: 'integer' },
+				target: { type: ['integer', 'string'], description: 'Control index from controls, or its name.' },
+				toTarget: { type: ['integer', 'string'], description: 'drag: drop on this control.' },
+				role: { type: 'string', description: 'Disambiguates a name target: Button, Edit...' },
+				strokes: {
+					type: 'array',
+					items: { type: 'array', items: { type: 'array', items: { type: 'integer' } } },
+					description: 'draw: strokes of [x,y] points; the button lifts between strokes.'
+				},
+				smooth: { type: 'boolean', description: 'draw: curves, not straight lines.' },
+				durationMs: { type: 'integer', description: 'drag, draw, move: speed, max 15000.' },
+				holdMs: { type: 'integer', description: 'click, key: stay down this long. drag: pause first. down: auto-release after this (default 30000, max 120000).' },
+				text: { type: 'string' },
+				mode: { type: 'string', enum: ['paste', 'keys'] },
+				key: { type: 'string', description: "'enter', 'ctrl+s', 'win+r'. down/up: keys to hold or release; up alone releases everything." },
+				amount: { type: 'integer', description: 'scroll notches, + is up.' },
+				button: { type: 'string', enum: ['left', 'right', 'middle', 'back', 'forward'] },
+				modifiers: { type: 'array', items: { type: 'string', enum: ['ctrl', 'shift', 'alt', 'win'] } },
+				width: { type: 'integer' },
+				height: { type: 'integer' },
+				show: { type: 'string', enum: ['minimize', 'maximize', 'restore'] },
+				label: { type: 'string', description: 'Few words shown beside the pointer.' },
+				title: { type: 'string', description: 'Window title or process substring; brought to front first.' },
+				hwnd: { type: 'string' },
+				tolerant: { type: 'boolean', description: 'focus: note a refusal instead of failing.' },
+				expect: expectSchema,
+				bounds: { type: 'boolean', description: 'controls: add positions.' },
+				meaningfulOnly: { type: 'boolean', description: 'controls: default true.' },
+				includeValues: { type: 'boolean' },
+				settleMs: { type: 'integer' },
+				capture: { type: 'boolean', description: 'Add a frame of what changed.' },
 				forceImage: { type: 'boolean' }
 			},
 			required: ['action'],
 			additionalProperties: false
 		},
-		annotations: { title: 'Desktop control', readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+		annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
 	},
 	{
 		name: 'desktop_sequence',
-		title: 'Desktop batch',
-		description: 'Run several desktop_control actions in ONE call and look once at the end - the fast path. Steps run in order; the first failed step (including an unmet expect or a refused focus) stops the batch. Esc stops it. Declare risk: low runs freely; medium/high (batch or step) is refused without confirm: true, and with it the user is asked to approve. dryRun lists the plan.',
+		description: 'Run many desktop_control actions in one call, the cheap way to work: one round trip, and it stops at the first failure. Esc stops it. Declare risk for anything that sends, deletes, pays or publishes; medium/high needs confirm: true after the user agrees.',
 		inputSchema: {
 			type: 'object',
 			properties: {
 				steps: {
 					type: 'array',
-					items: {
-						type: 'object',
-						properties: {
-							action: { type: 'string', enum: STEP_ACTIONS },
-							...actionProps,
-							ms: { type: 'integer', description: 'wait: milliseconds.' },
-							settleMs: { type: 'integer', description: 'Pause after this step (default 100).' },
-							risk: { type: 'string', enum: RISKS },
-							riskNote: { type: 'string' }
-						},
-						required: ['action'],
-						additionalProperties: false
-					}
+					description: "Each step takes desktop_control's fields (not windows/controls), plus action 'wait' with ms, settleMs (default 100), risk, riskNote.",
+					items: { type: 'object', properties: { action: { type: 'string', enum: STEP_ACTIONS } }, required: ['action'] }
 				},
-				risk: { type: 'string', enum: RISKS, description: 'Risk of the whole batch (default low).' },
-				confirm: { type: 'boolean', description: 'The user agreed to a medium/high batch.' },
+				risk: { type: 'string', enum: RISKS },
+				confirm: { type: 'boolean' },
 				dryRun: { type: 'boolean' },
-				capture: { type: 'string', enum: ['end', 'none'], description: 'end (default): one frame after the last step.' },
-				target: { type: 'string', enum: ['window', 'screen', 'all'], description: 'End frame: the window in front (default), primary screen, or all monitors.' },
+				capture: { type: 'string', enum: ['none', 'window', 'screen', 'all'], description: "Frame after the last step, changes only. Default none. 'window' is the one in front." },
 				window: { type: 'string', description: 'Frame this window instead.' },
-				region: { type: 'string', description: "Crop the end frame: 'x,y,width,height'." },
-				diff: { type: 'boolean', description: 'End frame shows only what changed (default true).' },
-				maxEdge: { type: 'integer' },
-				forceImage: { type: 'boolean' },
-				stopOnError: { type: 'boolean', description: 'Default true. An unknown outcome or Esc always stops.' },
-				settleMs: { type: 'integer', description: 'Max wait for the screen to settle before the end frame (default 1000).' }
+				region: { type: 'string', description: "Frame 'x,y,w,h' instead." }
 			},
 			required: ['steps'],
 			additionalProperties: false
 		},
-		annotations: { title: 'Desktop batch', readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+		annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
 	}
 ];
 
@@ -216,7 +201,7 @@ export function createHandlers(engine, config) {
 		const payload = {
 			op: 'action',
 			action: args.action,
-			...pick(args, [...ACTION_FIELDS, 'meaningfulOnly', 'includeValues']),
+			...pick(args, [...ACTION_FIELDS, 'meaningfulOnly', 'includeValues', 'bounds']),
 			settleMs: wantsFrame ? 0 : (args.settleMs ?? 0)
 		};
 		let result;
@@ -310,26 +295,23 @@ export function createHandlers(engine, config) {
 			await banner(false);
 		}
 		summary.notRun = steps.length - summary.results.length;
+		summary.ms = Date.now() - started;
 
 		let text = sequenceText(summary);
 		let frame;
-		if (args.capture !== 'none' && !interrupted) {
+		const wanted = args.capture ?? (typeof args.window === 'string' || typeof args.region === 'string' ? 'window' : 'none');
+		if (wanted !== 'none' && !interrupted) {
 			let target;
 			if (typeof args.region === 'string') target = { region: args.region };
 			else if (typeof args.window === 'string') target = { window: args.window };
-			else if (args.target === 'screen') target = { screen: 'primary' };
-			else if (args.target === 'all') target = { screen: 'all' };
+			else if (wanted === 'screen') target = { screen: 'primary' };
+			else if (wanted === 'all') target = { screen: 'all' };
 			else {
 				const last = [...summary.results].reverse().find((r) => r.a?.foreground?.hwnd);
 				target = last ? { hwnd: last.a.foreground.hwnd } : { screen: 'primary' };
 			}
 			try {
-				frame = await capture({ ...target, includeCursor: false }, extra, {
-					diff: args.diff !== false,
-					settleMaxMs: args.settleMs ?? config.captureSettleMs,
-					forceImage: args.forceImage,
-					maxEdge: args.maxEdge
-				});
+				frame = await capture({ ...target, includeCursor: false }, extra, { diff: true, settleMaxMs: config.captureSettleMs });
 				text += `\n${frameText(frame, 'end-frame')}`;
 			} catch (error) {
 				text += `\nend frame failed: ${error.message}`;

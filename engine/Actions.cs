@@ -14,7 +14,7 @@ namespace DeskPilot
 {
     public static class Actions
     {
-        static readonly HashSet<string> Pointer = new HashSet<string> { "click", "doubleClick", "rightClick", "middleClick", "move", "scroll", "drag" };
+        static readonly HashSet<string> Pointer = new HashSet<string> { "click", "doubleClick", "tripleClick", "rightClick", "middleClick", "move", "scroll", "drag", "draw" };
 
         public static Dictionary<string, object> Run(Request req)
         {
@@ -26,6 +26,7 @@ namespace DeskPilot
             var notes = new List<object>();
             IntPtr window = IntPtr.Zero;
             Node control = null;
+            Program.ShowLabel(P.Str(p, "label"));
 
             switch (action)
             {
@@ -37,7 +38,7 @@ namespace DeskPilot
                     {
                         window = Win.Resolve(p);
                         if (window == IntPtr.Zero) window = Native.GetForegroundWindow();
-                        foreach (var kv in Uia.List(window, P.Bool(p, "meaningfulOnly", true), P.Bool(p, "includeValues", false), req)) r[kv.Key] = kv.Value;
+                        foreach (var kv in Uia.List(window, P.Bool(p, "meaningfulOnly", true), P.Bool(p, "includeValues", false), P.Bool(p, "bounds", false), req)) r[kv.Key] = kv.Value;
                         break;
                     }
 
@@ -78,7 +79,7 @@ namespace DeskPilot
                             control = Resolve(p, window);
                             EnsureFront(window, req);
                             // Focus the control itself; a click could also move a caret or open a menu.
-                            try { control.Element.SetFocus(); } catch { Input.MoveTo(Uia.PointOf(control).X, Uia.PointOf(control).Y); Input.Click("left", 1, req); }
+                            try { control.Element.SetFocus(); } catch { Input.MoveTo(Uia.PointOf(control).X, Uia.PointOf(control).Y); Input.Click("left", 1, 0, req); }
                             req.Sleep(60);
                             r["control"] = Uia.Describe(control);
                         }
@@ -96,9 +97,25 @@ namespace DeskPilot
                         window = Win.Resolve(p);
                         if (window != IntPtr.Zero) EnsureFront(window, req);
                         req.Check();
-                        Input.Chord(key);
+                        Input.Chord(key, Ms(p, "holdMs", Input.MaxGestureMs) ?? 0, req);
                         break;
                     }
+
+                case "down":
+                    {
+                        if (Program.Banner == null) throw new InvalidOperationException("down is unavailable in one-shot mode: no engine would stay running to release it");
+                        var key = P.Str(p, "key");
+                        if (key == null) { RunPointer(action, p, r, req, out window, out control); break; }
+                        window = Win.Resolve(p);
+                        if (window != IntPtr.Zero) EnsureFront(window, req);
+                        req.Check();
+                        Input.HoldKeys(Input.KeyList(key), Ms(p, "holdMs", MaxHoldMs) ?? DefaultHoldMs);
+                        break;
+                    }
+
+                case "up":
+                    if (!Input.LetGo(P.Str(p, "key"), P.Str(p, "button"))) notes.Add("nothing to release: that was not held");
+                    break;
 
                 default:
                     if (!Pointer.Contains(action)) throw new ArgumentException("unknown action '" + action + "'");
@@ -131,30 +148,69 @@ namespace DeskPilot
             var expect = P.Obj(p, "expect");
             if (expect != null) r["expect"] = Expect(expect, p, req, action == "waitFor" ? 5000 : 1500);
 
+            var expired = Input.TakeExpired();
+            if (expired != null) notes.Add(expired + " was released automatically: its holdMs ran out");
+            var held = Input.Held();
+            if (held != null) r["held"] = held;
             if (notes.Count > 0) r["notes"] = notes;
             r["cursor"] = Win.Cursor();
             r["foreground"] = Win.Describe(Native.GetForegroundWindow());
             return r;
         }
 
-        static IntPtr TargetWindow(Dictionary<string, object> p)
+        const int DefaultHoldMs = 30000, MaxHoldMs = 120000;
+
+        static int? Ms(Dictionary<string, object> p, string key, int max)
+        {
+            var value = P.Int(p, key);
+            if (value != null && (value < 0 || value > max)) throw new ArgumentException(key + " must be between 0 and " + max);
+            return value;
+        }
+
+        static IntPtr TargetWindow(Dictionary<string, object> p, string key = "target")
         {
             // An index belongs to the window it was listed for; a name defaults to the window in front.
-            var target = P.Raw(p, "target");
+            var target = P.Raw(p, key);
             var w = target is string ? Native.GetForegroundWindow() : Uia.LastListedWindow();
             if (w == IntPtr.Zero) throw new ArgumentException("target needs a window: pass title or hwnd, or read controls first");
             return w;
         }
 
-        static Node Resolve(Dictionary<string, object> p, IntPtr window)
+        static Node Resolve(Dictionary<string, object> p, IntPtr window, string key = "target")
         {
-            var target = P.Raw(p, "target");
+            var target = P.Raw(p, key);
             var name = target as string;
-            if (name != null) return Uia.ByName(window, name, P.Str(p, "role"));
+            if (name != null) return Uia.ByName(window, name, key == "target" ? P.Str(p, "role") : null);
             int index;
             try { index = Convert.ToInt32(target); }
-            catch { throw new ArgumentException("target must be a control index from controls, or a control name"); }
+            catch { throw new ArgumentException(key + " must be a control index from controls, or a control name"); }
             return Uia.ByIndex(window, index);
+        }
+
+        /// <summary>[[[x,y],[x,y],...], ...] from the wire, checked.</summary>
+        static List<List<Point>> Strokes(object raw)
+        {
+            var strokes = raw as object[];
+            if (strokes == null || strokes.Length == 0) throw new ArgumentException("draw needs strokes: [[[x,y],[x,y],...], ...]");
+            if (strokes.Length > 64) throw new ArgumentException("draw takes at most 64 strokes (got " + strokes.Length + "); split it");
+            var list = new List<List<Point>>();
+            int total = 0;
+            foreach (var stroke in strokes)
+            {
+                var points = stroke as object[];
+                if (points == null || points.Length == 0) throw new ArgumentException("each stroke needs at least one [x,y] point");
+                var path = new List<Point>();
+                foreach (var point in points)
+                {
+                    var pair = point as object[];
+                    if (pair == null || pair.Length != 2) throw new ArgumentException("each point must be [x,y]");
+                    path.Add(new Point(Convert.ToInt32(pair[0]), Convert.ToInt32(pair[1])));
+                }
+                total += path.Count;
+                list.Add(path);
+            }
+            if (total > 4000) throw new ArgumentException("draw takes at most 4000 points (got " + total + "); split it");
+            return list;
         }
 
         static void EnsureFront(IntPtr window, Request req)
@@ -178,35 +234,68 @@ namespace DeskPilot
                 x = pt.X; y = pt.Y;
                 r["control"] = Uia.Describe(control);
             }
-            if (action != "scroll" && (x == null || y == null)) throw new ArgumentException(action + " needs x and y, or a target");
+            bool anywhere = action == "scroll" || action == "draw" || action == "down";
+            if ((x == null) != (y == null) || (!anywhere && x == null)) throw new ArgumentException(action + " needs x and y, or a target");
+            if (P.Raw(p, "toTarget") != null)
+            {
+                if (window == IntPtr.Zero) window = TargetWindow(p, "toTarget");
+                var drop = Resolve(p, window, "toTarget");
+                var at = Uia.PointOf(drop);
+                p["toX"] = at.X; p["toY"] = at.Y;
+                r["drop"] = Uia.Describe(drop);
+            }
             if (window != IntPtr.Zero && action != "move") EnsureFront(window, req);
             req.Check();
             var button = P.Str(p, "button") ?? "left";
             string modLabel;
             var mods = Input.Modifiers(P.Raw(p, "modifiers"), out modLabel);
-            if (mods.Count > 0 && action == "move") throw new ArgumentException("modifiers apply to clicks, drags and scroll, not move");
+            if (mods.Count > 0 && (action == "move" || action == "down")) throw new ArgumentException("modifiers apply to clicks, drags, draw and scroll; hold a key across steps with down");
             if (mods.Count > 0) r["modifiers"] = modLabel;
             // Hold the modifiers for exactly the gesture, and release them whatever happens:
             // a stuck Ctrl would turn every later click and keystroke into a shortcut.
+            mods = Input.NotHeld(mods);
             Input.Press(mods);
-            try { Gesture(action, p, x, y, button, req); }
-            finally { Input.Release(mods); }
+            if (Program.Banner != null) Program.Banner.PassThrough(true);
+            try { Gesture(action, p, x, y, button, r, req); }
+            finally
+            {
+                if (Program.Banner != null) Program.Banner.PassThrough(false);
+                Input.Release(mods);
+            }
         }
 
-        static void Gesture(string action, Dictionary<string, object> p, int? x, int? y, string button, Request req)
+        static void Gesture(string action, Dictionary<string, object> p, int? x, int? y, string button, Dictionary<string, object> r, Request req)
         {
+            int holdMs = action == "down" ? 0 : Ms(p, "holdMs", Input.MaxGestureMs) ?? 0;
+            var durationMs = Ms(p, "durationMs", Input.MaxGestureMs);
             switch (action)
             {
-                case "move": Input.MoveTo(x.Value, y.Value); break;
-                case "click": Input.MoveTo(x.Value, y.Value); Input.Click(button, 1, req); break;
-                case "doubleClick": Input.MoveTo(x.Value, y.Value); Input.Click(button, 2, req); break;
-                case "rightClick": Input.MoveTo(x.Value, y.Value); Input.Click("right", 1, req); break;
-                case "middleClick": Input.MoveTo(x.Value, y.Value); Input.Click("middle", 1, req); break;
+                case "move":
+                    if (durationMs != null || Input.ButtonHeld) Input.Glide(x.Value, y.Value, durationMs, req);
+                    else Input.MoveTo(x.Value, y.Value);
+                    break;
+                case "click": Input.MoveTo(x.Value, y.Value); Input.Click(button, 1, holdMs, req); break;
+                case "doubleClick": Input.MoveTo(x.Value, y.Value); Input.Click(button, 2, holdMs, req); break;
+                case "tripleClick": Input.MoveTo(x.Value, y.Value); Input.Click(button, 3, holdMs, req); break;
+                case "rightClick": Input.MoveTo(x.Value, y.Value); Input.Click("right", 1, holdMs, req); break;
+                case "middleClick": Input.MoveTo(x.Value, y.Value); Input.Click("middle", 1, holdMs, req); break;
+                case "down":
+                    if (x != null) Input.MoveTo(x.Value, y.Value);
+                    Input.HoldButton(button, Ms(p, "holdMs", MaxHoldMs) ?? DefaultHoldMs);
+                    break;
                 case "drag":
                     {
                         int? tx = P.Int(p, "toX"), ty = P.Int(p, "toY");
-                        if (tx == null || ty == null) throw new ArgumentException("drag needs toX and toY");
-                        Input.Drag(x.Value, y.Value, tx.Value, ty.Value, button, req);
+                        if (tx == null || ty == null) throw new ArgumentException("drag needs toX and toY, or a toTarget");
+                        if (holdMs + (durationMs ?? 0) > Input.MaxGestureMs) throw new ArgumentException("holdMs and durationMs together must stay under " + Input.MaxGestureMs);
+                        Input.Drag(x.Value, y.Value, tx.Value, ty.Value, button, holdMs, durationMs, req);
+                        break;
+                    }
+                case "draw":
+                    {
+                        var strokes = Strokes(P.Raw(p, "strokes"));
+                        int px = Input.Draw(strokes, P.Bool(p, "smooth", false), button, durationMs, req);
+                        r["drew"] = strokes.Count + (strokes.Count == 1 ? " stroke, " : " strokes, ") + px + " px";
                         break;
                     }
                 case "scroll":

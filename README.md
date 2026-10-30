@@ -7,12 +7,12 @@ Three tools (deliberately three: every schema costs tokens):
 | tool | what it does |
 | --- | --- |
 | `screen_view` | the live screen, a window (any window, by title or handle) or a region, as a real image with coordinate rulers |
-| `desktop_control` | click (also Ctrl/Shift/Alt-click), drag, scroll, type, keys, focus, waitFor, move/resize/minimize/maximize/restore a window, list windows, read a window's UI Automation controls |
+| `desktop_control` | click (also Ctrl/Shift/Alt-click, triple-click, long press), drag (also onto a control), draw freehand, hold a button or key across steps, scroll, type, keys, focus, waitFor, move/resize/minimize/maximize/restore a window, list windows, read a window's UI Automation controls |
 | `desktop_sequence` | many actions in one call, checked step by step, with one frame at the end |
 
 ## Token cost compared with Windows-MCP
 
-Measured on 2026-10-25 in headless Claude Code runs (Opus 5.5, Claude Code 2.1.304) on one 2560×1600 Windows 11 machine, against Windows-MCP 0.8.5. Numbers are input tokens added to the conversation.
+Measured on 2026-10-25 for version 0.1.0 in headless Claude Code runs (Opus 5.5, Claude Code 2.1.304) on one 2560×1600 Windows 11 machine, against Windows-MCP 0.8.5. Numbers are input tokens added to the conversation. Later versions are cheaper still; see below.
 
 | | desk-pilot | Windows-MCP |
 | --- | --- | --- |
@@ -27,6 +27,27 @@ Where the difference comes from:
 
 - Screenshots are shrunk to the size Claude actually uses, an unchanged screen is not sent again, and `diff` sends only the region that changed.
 - `desktop_sequence` runs a multi-step task (click, type, Enter, ...) in one call; each extra call is another model round trip over the whole conversation. This saving was not measured against Windows-MCP.
+
+Measured on 2026-10-30, 0.2.0 against the current code, on the same machine:
+
+| | 0.2.0 | now |
+| --- | --- | --- |
+| All three tool schemas | 10,371 characters | 5,323 characters, with more actions |
+| Frame after a batch | always | only when asked for |
+| `controls` on the test window | 671 characters | 337 characters |
+
+Real token counts for this table are not given: repeated headless runs jumped by about 100,000 tokens between identical calls, too much noise to read a difference of a few thousand.
+
+Frame size was chosen by a blind reading test on 2026-10-30: random letters and digits in dark Segoe UI on white, on a 2560×1600 screen, read back by Claude from a full-screen frame. Tokens are Anthropic's published estimate (width × height ÷ 750), not a measurement.
+
+| Longest side | Tokens per full-screen frame | 8 px letters | 10 px letters |
+| --- | --- | --- | --- |
+| 1024 | 874 | 9/14 | 41/42 |
+| 1152 | 1,106 | 33/42 | 38/42 |
+| 1280 | 1,365 | 79/84 | 83/84 |
+| **1356 (default)** | 1,531 | 56/56 | 84/84 |
+
+It is a small sample, and low-contrast text, coloured backgrounds or other fonts may read worse. For smaller text, frame one window or zoom with `region`.
 
 Caveats: the two UI reads differ in scope (one window vs. the whole desktop). Windows-MCP covers more ground (launching apps, virtual desktops, files, registry, processes, browser DOM), which is part of why its schemas are larger.
 
@@ -57,13 +78,17 @@ Requirements: Windows 10 2004 or later / Windows 11, Node 22.19+ on `PATH`. Noth
 
 **Modifier clicks and window layout.** `modifiers: ["ctrl"]` (or `shift`, `alt`, `win`) holds keys for exactly one click, drag or scroll, and always releases them, so a stuck Ctrl can never turn later input into shortcuts. `action: "window"` moves and resizes a window's *visible* frame (the rectangle `windows` reports, without Windows' invisible resize border), or minimizes, maximizes and restores it; it checks the result and says so when an app snaps itself to a different size.
 
-**Cheap frames.** Frames are shrunk to Claude's image budget by the engine, so the coordinate line under each image is exact, not a guess. An identical frame is not sent again. `diff: true` (the default for the end frame of a batch) sends only the region that changed. `maxEdge` asks for a smaller glance and `region` zooms in. Rulers are drawn after scaling, so their labels stay readable. End frames wait until the screen stops changing instead of sleeping a fixed time.
+**Drawing, dragging and holding.** `draw` takes strokes of `[x, y]` points, follows them at about 1000 px/s, and lifts the button between strokes; `smooth: true` curves through the points. `drag` can drop onto a control (`toTarget`), and `durationMs` sets its speed. `down` and `up` hold a mouse button or key across steps, so one stroke or a Shift-held selection can span several calls. Anything held is released by `up`, Esc, an interrupted turn, the `holdMs` deadline (30 s by default) or the engine closing, and the next engine releases what a killed one left down. Every result says `HOLDING` until it is released. `holdMs` on a click is a long press; on a key it repeats like a held key.
+
+**Cheap by default.** Tool results list only what needs attention: a clean batch is a count and the final state, not a line per step. A batch sends no frame unless you pass `capture`. `controls` leaves out positions unless you pass `bounds: true`. Batch steps have no schema of their own, because they would repeat `desktop_control`'s fields; a misspelled field is refused before anything runs.
+
+**Cheap frames.** Frames are shrunk to 1356 px by the engine, so the coordinate line under each image is exact, not a guess. An identical frame is not sent again. `diff: true` (always on for the frame after a batch) sends only the region that changed. `maxEdge` asks for a smaller glance and `region` zooms in. Rulers are drawn after scaling, so their labels stay readable. End frames wait until the screen stops changing instead of sleeping a fixed time.
 
 **Safety.**
 - A `desktop_sequence` declared `medium`/`high` (on the batch or on any step) is refused before anything runs unless it carries `confirm: true`. A `PreToolUse` hook then turns that confirm into a Claude Code permission prompt listing every step, even when the tool is on your allow list. `dryRun` lists the plan.
 - A batch stops at the first failure: a refused focus, a missing control, or an unmet `expect`. Input is never sent to a window other than the one the step names.
 - An action whose outcome is unknown (the engine died or timed out after receiving it) is reported as such and never retried. A capture, which has no side effects, is retried.
-- While Claude is acting, a small banner at the top of the screen says so, and **Esc** stops the batch between steps, even during a wait. The banner is excluded from screen capture, so it never covers what Claude is looking at. Interrupting the turn in Claude Code stops it the same way.
+- While Claude is acting, the screen shows it, in the style of ego lite's agent mode: a blue glow around the primary screen, a soft light around the pointer with an optional `label` beside it, and a control bar at the bottom. **Esc**, **Stop** or **Take over** stops the batch between steps, even during a wait; both buttons do the same thing as Esc. None of this takes focus or appears in a frame, and the bar ignores clicks during Claude's own pointer actions, so Claude cannot hit Stop by accident. Interrupting the turn in Claude Code stops it the same way.
 
 
 ## Settings
@@ -72,21 +97,26 @@ Environment variables, for example in the `env` block of Claude Code's `settings
 
 | variable | default | |
 | --- | --- | --- |
-| `DESK_PILOT_IMAGE_MAX_EDGE` | 1568 | longest side of a delivered frame |
+| `DESK_PILOT_IMAGE_MAX_EDGE` | 1356 | longest side of a delivered frame |
 | `DESK_PILOT_IMAGE_MAX_PIXELS` | 1150000 | pixel budget of a delivered frame |
 | `DESK_PILOT_MAX_SEQUENCE_STEPS` | 24 | steps per batch |
 | `DESK_PILOT_STEP_SETTLE_MS` | 100 | pause after each batch step |
 | `DESK_PILOT_CAPTURE_SETTLE_MS` | 1000 | longest wait for the screen to settle before a frame |
 | `DESK_PILOT_TIMEOUT_MS` | 20000 | per action; past it the engine is restarted and the action reported as unknown |
 | `DESK_PILOT_DEDUP_TTL_MS` | 300000 | how long an unchanged frame is not re-sent |
-| `DESK_PILOT_TAKEOVER` | on | the banner and Esc hotkey (`0` turns them off) |
-| `DESK_PILOT_CAPTION` | English | banner text |
+| `DESK_PILOT_TAKEOVER` | on | the overlay and Esc hotkey (`0` turns them off) |
+| `DESK_PILOT_CAPTION` | English | second line of the control bar |
+| `DESK_PILOT_OVERLAY_IN_FRAMES` | off | `1` lets the overlay into frames, for checking how it looks |
 
 ## Limits
 
 - Windows blocks injected input into elevated (administrator) windows unless Claude Code itself runs elevated.
 - Canvas-drawn and some Electron windows expose little or no control tree; use frames there.
-- Esc and the banner are unavailable once the engine has fallen back to one-shot mode.
+- Esc and the overlay are unavailable once the engine has fallen back to one-shot mode, and `down` is refused there because nothing would stay running to release it.
+- The overlay covers the primary monitor only. It was not tested on a second monitor.
+- Input is a mouse and a keyboard: no pen pressure and no multi-touch gestures.
+- `button: "back"` and `"forward"` were not confirmed end to end: on the test machine XMouseButtonControl took them before they reached the window. A low-level hook saw them being sent, and `key: "alt+left"` does the same job in most apps.
+- `down` on a key does not auto-repeat; `key` with `holdMs` does.
 
 ## Developing
 

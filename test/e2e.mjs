@@ -40,6 +40,7 @@ const pngSize = (b64) => {
 const stamp = Math.random().toString(36).slice(2, 8);
 const title = `desk-e2e café ${stamp}`;
 const thiefTitle = `desk-thief ${stamp}`;
+const canvasTitle = `desk-canvas ${stamp}`;
 const logFile = join(work, 'log.txt');
 const readyFile = join(work, 'ready.txt');
 writeFileSync(logFile, '', 'utf8');
@@ -87,7 +88,41 @@ $thief.Location = New-Object System.Drawing.Point(840, 140)
 $thief.Size = New-Object System.Drawing.Size(320, 180)
 $thief.BackColor = [System.Drawing.Color]::FromArgb(40, 90, 160)
 $thief.Add_Activated({ W 'thief activated'; $null = $form.BeginInvoke([Action] { $form.Activate() }) })
-$form.Add_Shown({ $thief.Show(); $form.Activate(); [System.IO.File]::WriteAllText('${readyFile}', ('{0}|0x{1:X}|0x{2:X}' -f $PID, $form.Handle.ToInt64(), $thief.Handle.ToInt64())) })
+$canvas = New-Object System.Windows.Forms.Form
+$canvas.Text = '${canvasTitle}'
+$canvas.StartPosition = 'Manual'
+$canvas.Location = New-Object System.Drawing.Point(140, 660)
+$canvas.Size = New-Object System.Drawing.Size(740, 420)
+$canvas.KeyPreview = $true
+$canvas.Add_KeyDown({ W ('keydown ' + $_.KeyCode) })
+$canvas.Add_KeyUp({ W ('keyup ' + $_.KeyCode) })
+$pad = New-Object System.Windows.Forms.Panel
+$pad.AccessibleName = 'Pad'
+$pad.Location = New-Object System.Drawing.Point(10, 10)
+$pad.Size = New-Object System.Drawing.Size(460, 350)
+$pad.BackColor = [System.Drawing.Color]::White
+$pen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(30, 60, 200), 2)
+$script:pts = New-Object System.Collections.Generic.List[string]
+$script:prev = $null
+$script:pressedAt = 0
+$pad.Add_MouseDown({ $script:pts.Clear(); $script:pts.Add(('{0},{1}' -f $_.X, $_.Y)); $script:prev = $_.Location; $script:pressedAt = [Environment]::TickCount; W ('down ' + $_.Button) })
+$pad.Add_MouseMove({ if ($_.Button -ne 'None') { $script:pts.Add(('{0},{1}' -f $_.X, $_.Y)); $g = $pad.CreateGraphics(); $g.DrawLine($pen, $script:prev, $_.Location); $g.Dispose(); $script:prev = $_.Location } })
+$pad.Add_MouseUp({ W ('up ' + $_.Button + ' ms=' + ([Environment]::TickCount - $script:pressedAt) + ' pts=' + ($script:pts -join ';')) })
+$canvas.Controls.Add($pad)
+$source = New-Object System.Windows.Forms.Button
+$source.Text = 'Drag me'; $source.Location = New-Object System.Drawing.Point(500, 20); $source.Width = 120
+$source.Add_MouseDown({ if ($_.Button -eq 'Left') { $done = $source.DoDragDrop('payload', [System.Windows.Forms.DragDropEffects]::Copy); W ('drag finished ' + $done) } })
+$canvas.Controls.Add($source)
+$drop = New-Object System.Windows.Forms.Panel
+$drop.AccessibleName = 'Drop here'
+$drop.AllowDrop = $true
+$drop.Location = New-Object System.Drawing.Point(500, 100)
+$drop.Size = New-Object System.Drawing.Size(200, 140)
+$drop.BackColor = [System.Drawing.Color]::LightGray
+$drop.Add_DragEnter({ $_.Effect = [System.Windows.Forms.DragDropEffects]::Copy })
+$drop.Add_DragDrop({ W ('dropped ' + $_.Data.GetData([string]) + ' keys=' + $_.KeyState) })
+$canvas.Controls.Add($drop)
+$form.Add_Shown({ $thief.Show(); $canvas.Show(); $form.Activate(); [System.IO.File]::WriteAllText('${readyFile}', ('{0}|0x{1:X}|0x{2:X}' -f $PID, $form.Handle.ToInt64(), $thief.Handle.ToInt64())) })
 [System.Windows.Forms.Application]::Run($form)
 `;
 const formPath = join(work, 'throwaway.ps1');
@@ -222,14 +257,15 @@ const batch = await timed(() => call(a.client, 'desktop_sequence', {
 		{ action: 'click', target: 'Delayed', title },
 		{ action: 'type', target: 'Input', title, text: ' + more', expect: { value: 'more' } },
 		{ action: 'key', key: 'enter', title }
-	]
+	],
+	capture: 'window'
 }));
 await sleep(300);
 const batchText = textOf(batch.value);
 check('a six-step batch with waitFor runs every step', /done=6\/6/u.test(batchText), batchText.split('\n').filter((l) => l.startsWith('#')).join(' | '));
 check('in order, as the window saw it', ['click Show later', 'delayed shown', 'click Delayed'].every((line) => log().slice(before).includes(line)) && log().slice(before).some((line) => line.startsWith('enter:') && line.endsWith('+ more')), log().slice(before).join(' | '));
 check('the batch ends with one frame', imageOf(batch.value) !== undefined, textOf(batch.value).split('\n').find((l) => l.startsWith('<end-frame')));
-measurements.batch6 = { roundTripMs: batch.ms, stepMs: [...batchText.matchAll(/^#\d+ \w+ ok (\d+)ms/gmu)].map((m) => Number(m[1])) };
+measurements.batch6 = { roundTripMs: batch.ms, chars: batchText.length };
 
 // an unmet expectation stops the batch
 before = log().length;
@@ -337,16 +373,192 @@ check('window works as a batch step, and controls still resolve after the move',
 const noArgs = await call(a.client, 'desktop_control', { action: 'window', title });
 check('window with nothing to do is refused', noArgs.isError === true && /needs show/u.test(textOf(noArgs)));
 
+// drawing, dragging and holding, on a pad that records every point it receives
+const canvasControls = textOf(await call(a.client, 'desktop_control', { action: 'controls', title: canvasTitle, bounds: true }));
+const boxOf = (name) => (canvasControls.match(new RegExp(`'${name}'.*? @ (-?\\d+),(-?\\d+) (\\d+)x(\\d+)`, 'u')) ?? []).slice(1).map(Number);
+const [padX, padY] = boxOf('Pad');
+check('the pad is listed as a control', Number.isInteger(padX), canvasControls.split('\n').find((l) => l.includes("'Pad'")));
+const onPad = ([x, y]) => [padX + x, padY + y];
+const strokeLines = (from) => log().slice(from).filter((l) => l.startsWith('up '));
+const pointsOf = (line) => line.split('pts=')[1].split(';').map((p) => p.split(',').map(Number));
+const heldMsOf = (line) => Number(line.match(/ms=(\d+)/u)?.[1]);
+const toSegment = ([px, py], [ax, ay], [bx, by]) => {
+	const dx = bx - ax;
+	const dy = by - ay;
+	const t = dx === 0 && dy === 0 ? 0 : Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)));
+	return Math.hypot(px - ax - t * dx, py - ay - t * dy);
+};
+const toLine = (p, line) => Math.min(...line.slice(1).map((b, i) => toSegment(p, line[i], b)));
+
+const zigzag = [[30, 40], [220, 40], [220, 200], [60, 200], [60, 90], [150, 90]];
+before = log().length;
+const drawn = await timed(() => call(a.client, 'desktop_control', { action: 'draw', title: canvasTitle, strokes: [zigzag.map(onPad)] }));
+await sleep(300);
+const zigzagLine = strokeLines(before)[0] ?? '';
+const zigzagPoints = zigzagLine ? pointsOf(zigzagLine) : [];
+const zigzagOff = Math.max(...zigzagPoints.map((p) => toLine(p, zigzag)));
+const cornersOff = Math.max(...zigzag.map((v) => Math.min(...zigzagPoints.map(([x, y]) => Math.hypot(x - v[0], y - v[1])))));
+check('draw follows a polyline point by point', /drew 1 stroke, 710 px/u.test(textOf(drawn.value)) && zigzagPoints.length > 40 && zigzagOff <= 1.5, `${zigzagPoints.length} points, worst ${zigzagOff.toFixed(1)} px off, ${drawn.ms} ms; ${textOf(drawn.value).split('\n')[0]}`);
+check('and reaches every corner, without cutting it', cornersOff <= 4, `worst corner ${cornersOff.toFixed(1)} px`);
+check('and ends exactly on the last point', zigzagPoints.at(-1)?.join() === zigzag.at(-1).join(), zigzagPoints.at(-1)?.join());
+measurements.draw = { points: zigzagPoints.length, worstPx: Number(zigzagOff.toFixed(2)), worstCornerPx: Number(cornersOff.toFixed(2)), ms: drawn.ms };
+
+const circle = Array.from({ length: 13 }, (_, i) => [230 + 90 * Math.cos(i * Math.PI / 6), 180 + 90 * Math.sin(i * Math.PI / 6)].map(Math.round));
+before = log().length;
+await call(a.client, 'desktop_control', { action: 'draw', title: canvasTitle, strokes: [circle.map(onPad)], smooth: true });
+await sleep(300);
+const circlePoints = strokeLines(before)[0] ? pointsOf(strokeLines(before)[0]) : [];
+const circleOff = Math.max(...circlePoints.map(([x, y]) => Math.abs(Math.hypot(x - 230, y - 180) - 90)));
+const straightOff = 90 - 90 * Math.cos(Math.PI / 12);
+check('smooth curves through the points instead of cutting straight chords', circlePoints.length > 30 && circleOff < 2.5, `worst ${circleOff.toFixed(1)} px from the circle; 12 chords would sag ${straightOff.toFixed(1)} px`);
+measurements.smoothCircleWorstPx = Number(circleOff.toFixed(2));
+
+before = log().length;
+await call(a.client, 'desktop_control', { action: 'draw', title: canvasTitle, strokes: [[[40, 300], [120, 300]].map(onPad), [[160, 300], [240, 300]].map(onPad), [[300, 300]].map(onPad)], button: 'right' });
+await sleep(300);
+const threeStrokes = strokeLines(before);
+check('each stroke lifts the button, with a single point as a dot', threeStrokes.length === 3 && threeStrokes.every((l) => l.startsWith('up Right')) && pointsOf(threeStrokes[0])[0].join() === '40,300' && pointsOf(threeStrokes[1])[0].join() === '160,300', threeStrokes.map((l) => l.split(' pts=')[0]).join(' | '));
+const typo = await call(a.client, 'desktop_sequence', { steps: [{ action: 'move', x: 10, y: 10, button2: 'left' }] });
+check('a misspelled step field is refused before anything runs', typo.isError === true && /unknown field "button2"/u.test(textOf(typo)), textOf(typo));
+const badDraw = await call(a.client, 'desktop_sequence', { steps: [{ action: 'draw', strokes: [] }] });
+check('a draw with no strokes is refused before anything runs', badDraw.isError === true && /needs strokes/u.test(textOf(badDraw)));
+
+before = log().length;
+const paced = await timed(() => call(a.client, 'desktop_control', { action: 'drag', title: canvasTitle, x: onPad([40, 330])[0], y: onPad([40, 330])[1], toX: onPad([420, 330])[0], toY: onPad([420, 330])[1], durationMs: 900, holdMs: 200 }));
+await sleep(300);
+const pacedLine = strokeLines(before)[0] ?? '';
+check('drag keeps to durationMs and holdMs', heldMsOf(pacedLine) >= 1050 && heldMsOf(pacedLine) < 1500 && pointsOf(pacedLine).length > 20, `${heldMsOf(pacedLine)} ms button down, ${pacedLine ? pointsOf(pacedLine).length : 0} points`);
+measurements.pacedDragMs = heldMsOf(pacedLine);
+
+before = log().length;
+const dropped = await call(a.client, 'desktop_control', { action: 'drag', title: canvasTitle, target: 'Drag me', toTarget: 'Drop here' });
+await sleep(400);
+check('drag and drop between two controls, through the real Windows drop', log().slice(before).includes('dropped payload keys=0') && log().slice(before).includes('drag finished Copy') && /onto \[Pane\] 'Drop here'/u.test(textOf(dropped)), `${log().slice(before).join(' | ')} / ${textOf(dropped).split('\n')[0]}`);
+before = log().length;
+await call(a.client, 'desktop_sequence', { steps: [{ action: 'drag', title: canvasTitle, target: 'Drag me', toTarget: 'Drop here', modifiers: ['ctrl'] }], capture: 'none' });
+await sleep(400);
+check('ctrl stays held through the drop', (Number(log().slice(before).find((l) => l.startsWith('dropped'))?.split('keys=')[1]) & 8) === 8, log().slice(before).join(' | '));
+
+const padCentre = onPad([230, 180]);
+before = log().length;
+await call(a.client, 'desktop_control', { action: 'click', title: canvasTitle, x: padCentre[0], y: padCentre[1], holdMs: 700 });
+await sleep(250);
+check('a long press stays down for holdMs', heldMsOf(strokeLines(before)[0] ?? '') >= 650, strokeLines(before)[0]?.split(' pts=')[0]);
+before = log().length;
+await call(a.client, 'desktop_control', { action: 'tripleClick', title: canvasTitle, x: padCentre[0], y: padCentre[1] });
+await sleep(250);
+check('tripleClick is three presses', log().slice(before).filter((l) => l === 'down Left').length === 3);
+before = log().length;
+const backClick = await call(a.client, 'desktop_control', { action: 'click', title: canvasTitle, x: padCentre[0], y: padCentre[1], button: 'back' });
+await call(a.client, 'desktop_control', { action: 'click', title: canvasTitle, x: padCentre[0], y: padCentre[1], button: 'forward' });
+await sleep(250);
+// XMouseButtonControl sits on the back and forward buttons, so on a machine running it a miss proves nothing.
+const remapped = spawnSync('tasklist', ['/FI', 'IMAGENAME eq XMouseButtonControl.exe'], { encoding: 'utf8' }).stdout.includes('XMouseButtonControl');
+if (remapped) console.log('skip the back and forward mouse buttons - XMouseButtonControl is running and intercepts them');
+else check('the back and forward mouse buttons', log().slice(before).includes('down XButton1') && log().slice(before).includes('down XButton2'), `${log().slice(before).filter((l) => l.startsWith('down')).join(' | ')} / ${textOf(backClick).split(String.fromCharCode(10))[0]}`);
+
+// held across calls: a stroke built from separate steps
+before = log().length;
+const pressed = await call(a.client, 'desktop_control', { action: 'down', title: canvasTitle, x: onPad([60, 60])[0], y: onPad([60, 60])[1] });
+check('down reports what it is holding', /HOLDING left/u.test(textOf(pressed)), textOf(pressed).split('\n')[0]);
+await call(a.client, 'desktop_control', { action: 'move', x: onPad([200, 60])[0], y: onPad([200, 60])[1] });
+await call(a.client, 'desktop_control', { action: 'move', x: onPad([200, 160])[0], y: onPad([200, 160])[1], durationMs: 300 });
+const liftNone = strokeLines(before).length;
+const lifted = await call(a.client, 'desktop_control', { action: 'up' });
+await sleep(250);
+const heldLine = strokeLines(before)[0] ?? '';
+check('the button stays down across calls until up', liftNone === 0 && !/HOLDING/u.test(textOf(lifted)) && heldLine.startsWith('up Left'), heldLine.split(' pts=')[0]);
+check('and the moves between were real strokes', heldLine !== '' && pointsOf(heldLine).length > 20 && Math.max(...pointsOf(heldLine).map((p) => toLine(p, [[60, 60], [200, 60], [200, 160]]))) <= 1.5, `${heldLine ? pointsOf(heldLine).length : 0} points`);
+
+before = log().length;
+await call(a.client, 'desktop_control', { action: 'down', key: 'shift', title });
+const whileHeld = await call(a.client, 'desktop_control', { action: 'click', title, target: 'Alpha', modifiers: ['shift'] });
+await call(a.client, 'desktop_control', { action: 'click', title, target: 'Alpha' });
+await call(a.client, 'desktop_control', { action: 'up', key: 'shift' });
+await call(a.client, 'desktop_control', { action: 'click', title, target: 'Alpha' });
+await sleep(250);
+check('a held key applies until up, even through a click naming it too', log().slice(before).join('|') === 'click Alpha mods=Shift|click Alpha mods=Shift|click Alpha' && /HOLDING shift/u.test(textOf(whileHeld)), log().slice(before).join(' | '));
+const nothing = await call(a.client, 'desktop_control', { action: 'up', key: 'shift' });
+check('up with nothing held says so', /nothing to release/u.test(textOf(nothing)));
+
+before = log().length;
+await call(a.client, 'desktop_control', { action: 'key', key: 'a', holdMs: 1000, title: canvasTitle });
+await sleep(250);
+const repeats = log().slice(before).filter((l) => l === 'keydown A').length;
+check('a key held for holdMs repeats, then comes up once', repeats >= 5 && log().slice(before).filter((l) => l === 'keyup A').length === 1, `${repeats} repeats`);
+
+before = log().length;
+await call(a.client, 'desktop_control', { action: 'down', title: canvasTitle, x: padCentre[0], y: padCentre[1], holdMs: 400 });
+await sleep(800);
+const afterDeadline = await call(a.client, 'desktop_control', { action: 'move', x: padCentre[0] + 4, y: padCentre[1] });
+check('a forgotten hold is released at its deadline, and the next result says so', strokeLines(before).length === 1 && /left was released automatically/u.test(textOf(afterDeadline)), textOf(afterDeadline).split('\n').slice(1).join(' '));
+
+// past the banner's 2 s linger, when nothing is running: Esc must still reach the hold
+before = log().length;
+await call(a.client, 'desktop_control', { action: 'down', title: canvasTitle, x: padCentre[0], y: padCentre[1] });
+await sleep(3000);
+const escHold = spawn('powershell.exe', ['-NoProfile', '-Command',
+	"Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class DeskEsc2 { [DllImport(\"user32.dll\")] public static extern void keybd_event(byte b, byte s, uint f, UIntPtr e); }'; [DeskEsc2]::keybd_event(0x1B, 0, 0, [UIntPtr]::Zero); [DeskEsc2]::keybd_event(0x1B, 0, 2, [UIntPtr]::Zero)"], { stdio: 'ignore' });
+await new Promise((resolvePromise) => escHold.on('close', resolvePromise));
+await sleep(500);
+check('Esc releases a hold while no call is running', strokeLines(before).length === 1 && heldMsOf(strokeLines(before)[0]) >= 3000, strokeLines(before)[0]?.split(' pts=')[0]);
+
+// an interrupted stroke lifts the button
+before = log().length;
+const stopping = new AbortController();
+const longDraw = call(a.client, 'desktop_control', { action: 'draw', title: canvasTitle, strokes: [[[20, 20], [440, 20], [440, 330]].map(onPad)], durationMs: 6000 }, { signal: stopping.signal });
+await sleep(900);
+stopping.abort();
+await longDraw.catch(() => {});
+await sleep(400);
+const cutLine = strokeLines(before)[0] ?? '';
+check('an interrupted draw stops and lifts the button', cutLine.startsWith('up Left') && heldMsOf(cutLine) < 2500, cutLine.split(' pts=')[0]);
+
+// the overlay: excluded from frames by default, drawn when the debug switch lets it in, and Stop works
+const fullFrame = textOf(primary).match(/shows (\d+)x(\d+) screen pixels/u).slice(1).map(Number);
+const barRegion = `${Math.round(fullFrame[0] / 2) - 420},${fullFrame[1] - 260},840,240`;
+const regionHash = async (client) => textOf(await call(client, 'screen_view', { region: barRegion, includeCursor: false, rulers: false, forceImage: true })).match(/hash=(\w+)/u)[1];
+await call(a.client, 'desktop_control', { action: 'focus', title: canvasTitle });
+await sleep(2600); // the overlay's linger, so it is really gone
+const quiet = await regionHash(a.client);
+const idleBatch = call(a.client, 'desktop_sequence', { steps: [{ action: 'wait', ms: 1800 }], capture: 'none' });
+await sleep(900);
+const busy = await regionHash(a.client);
+await idleBatch;
+check('the overlay never appears in a frame', quiet === busy, `${quiet} / ${busy}`);
+
+const bar = await startServer({ DESK_PILOT_DATA_DIR: join(work, 'data-bar'), DESK_PILOT_OVERLAY_IN_FRAMES: '1' });
+await call(bar.client, 'desktop_control', { action: 'focus', title: canvasTitle });
+await sleep(2600);
+const barQuiet = await regionHash(bar.client);
+const barRun = call(bar.client, 'desktop_sequence', { steps: [{ action: 'move', x: padCentre[0], y: padCentre[1], label: 'checking the overlay' }, { action: 'wait', ms: 2500 }, { action: 'type', target: 'Input', title, text: 'AFTER-STOP' }], capture: 'none' });
+await sleep(1000);
+const barShot = await call(bar.client, 'screen_view', { region: barRegion, includeCursor: false, rulers: false, forceImage: true });
+const barBusy = textOf(barShot).match(/hash=(\w+)/u)[1];
+writeFileSync(join(work, 'overlay-bar.png'), Buffer.from(imageOf(barShot).data, 'base64'));
+const fullShot = await call(bar.client, 'screen_view', { screen: 'primary', includeCursor: false, rulers: false, forceImage: true });
+writeFileSync(join(work, 'overlay-full.png'), Buffer.from(imageOf(fullShot).data, 'base64'));
+check('with the debug switch the overlay is drawn', barQuiet !== barBusy, `${barQuiet} / ${barBusy}`);
+const foregroundBefore = textOf(barShot).match(/foreground ('.*?')/u)?.[1];
+before = log().length;
+const stopClick = spawnSync('powershell.exe', ['-NoProfile', '-Command', `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class DeskStop { public struct R { public int L, T, Rt, B; } [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string c, string t); [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out R r); [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h); [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr v); [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y); [DllImport("user32.dll")] public static extern void mouse_event(uint f, int x, int y, int d, IntPtr e); }'; $null = [DeskStop]::SetProcessDpiAwarenessContext([IntPtr]::new(-4)); $h = [DeskStop]::FindWindow([NullString]::Value, 'desk-pilot overlay'); $r = New-Object DeskStop+R; $null = [DeskStop]::GetWindowRect($h, [ref]$r); $s = [DeskStop]::GetDpiForWindow($h) / 96; $null = [DeskStop]::SetCursorPos($r.Rt - [int](35 * $s), [int](($r.T + $r.B) / 2)); Start-Sleep -Milliseconds 120; [DeskStop]::mouse_event(2, 0, 0, 0, [IntPtr]::Zero); [DeskStop]::mouse_event(4, 0, 0, 0, [IntPtr]::Zero); Write-Output $r.Rt`], { encoding: 'utf8' });
+const barResult = textOf(await barRun);
+check('clicking Stop on the bar stops the batch, like Esc', /stopped: the person pressed Esc/u.test(barResult) && !log().slice(before).some((l) => l.includes('AFTER-STOP')), `${stopClick.stdout.trim()} / ${barResult.split('\n').find((l) => l.startsWith('stopped')) ?? barResult.slice(0, 160)}`);
+const fgAfter = textOf(await call(bar.client, 'desktop_control', { action: 'windows', title: canvasTitle }));
+check('and taking that click did not steal the foreground', /\[foreground/u.test(fgAfter), fgAfter.split('\n')[1]);
+await bar.client.close();
+await sleep(300);
+
 // warm latency
 const moveTimes = [];
 for (let i = 0; i < 10; i += 1) moveTimes.push((await timed(() => call(a.client, 'desktop_control', { action: 'move', x: 300 + i * 4, y: 600 }))).ms);
 const moves = await call(a.client, 'desktop_sequence', { steps: Array.from({ length: 10 }, (_, i) => ({ action: 'move', x: 400 + i * 4, y: 620, settleMs: 0 })), capture: 'none' });
-const moveSteps = [...textOf(moves).matchAll(/^#\d+ move ok (\d+)ms/gmu)].map((m) => Number(m[1]));
-measurements.warmMove = { roundTripMs: moveTimes, medianRoundTripMs: median(moveTimes), stepMs: moveSteps, medianStepMs: median(moveSteps) };
+const moveStepMs = Number(textOf(moves).match(/ms=(\d+)/u)[1]) / 10;
+measurements.warmMove = { roundTripMs: moveTimes, medianRoundTripMs: median(moveTimes), stepMs: moveStepMs };
 const clickTimes = [];
 for (let i = 0; i < 5; i += 1) clickTimes.push((await timed(() => call(a.client, 'desktop_control', { action: 'click', title, target: 'Beta' }))).ms);
 measurements.warmNamedClick = { roundTripMs: clickTimes, medianMs: median(clickTimes) };
-check('warm actions take milliseconds', median(moveSteps) < 60, `move step median ${median(moveSteps)} ms; named click median ${median(clickTimes)} ms`);
+check('warm actions take milliseconds', moveStepMs < 60, `${moveStepMs} ms per move step; named click median ${median(clickTimes)} ms`);
 
 // engine crashes: idle, in flight, then past the cap
 const pid0 = enginePids(serverPid);
@@ -378,7 +590,22 @@ const onceShot = await timed(() => call(a.client, 'screen_view', { forceImage: t
 check('past the crash cap, each request runs in a one-shot engine', !once.value.isError && enginePids(serverPid).length === 0, `named click ${once.ms} ms, workers=${enginePids(serverPid).length}`);
 check('and frames still work', imageOf(onceShot.value) !== undefined, `${onceShot.ms} ms`);
 measurements.oneShot = { namedClickMs: once.ms, captureMs: onceShot.ms };
+const onceDown = await call(a.client, 'desktop_control', { action: 'down', x: 500, y: 500 });
+check('down is refused in one-shot mode, where nothing could release it', onceDown.isError === true && /one-shot/u.test(textOf(onceDown)), textOf(onceDown));
 await a.client.close();
+
+// an engine killed while holding: the next engine lets go
+const b = await startServer({ DESK_PILOT_DATA_DIR: join(work, 'data-hold') });
+await call(b.client, 'desktop_control', { action: 'focus', title: canvasTitle });
+before = log().length;
+await call(b.client, 'desktop_control', { action: 'down', title: canvasTitle, x: padCentre[0], y: padCentre[1] });
+kill(enginePids(b.transport.pid)[0]);
+await sleep(400);
+const lostUp = strokeLines(before).length;
+await call(b.client, 'desktop_control', { action: 'move', x: 500, y: 500 });
+await sleep(300);
+check('a hold orphaned by a killed engine is released by the next engine', lostUp === 0 && strokeLines(before).length === 1, `${strokeLines(before).length} up after restart`);
+await b.client.close();
 
 kill(Number(windowPid));
 writeFileSync(join(work, 'measurements.json'), JSON.stringify(measurements, null, 2));

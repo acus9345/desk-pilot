@@ -13,6 +13,12 @@ namespace DeskPilot
     public struct POINT { public int X, Y; }
 
     [StructLayout(LayoutKind.Sequential)]
+    public struct SIZE { public int cx, cy; }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    public struct BLENDFUNCTION { public byte BlendOp, BlendFlags, SourceConstantAlpha, AlphaFormat; }
+
+    [StructLayout(LayoutKind.Sequential)]
     public struct MOUSEINPUT { public int dx, dy; public int mouseData; public uint dwFlags, time; public IntPtr dwExtraInfo; }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -75,6 +81,18 @@ namespace DeskPilot
         [DllImport("user32.dll")] public static extern bool RegisterHotKey(IntPtr h, int id, uint mods, uint vk);
         [DllImport("user32.dll")] public static extern bool UnregisterHotKey(IntPtr h, int id);
         [DllImport("user32.dll")] public static extern bool SetWindowDisplayAffinity(IntPtr h, uint affinity);
+        [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
+        [DllImport("user32.dll")] public static extern IntPtr GetWindowLongPtrW(IntPtr h, int index);
+        [DllImport("user32.dll")] public static extern IntPtr SetWindowLongPtrW(IntPtr h, int index, IntPtr value);
+
+        [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr h);
+        [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr h, IntPtr dc);
+        [DllImport("gdi32.dll")] public static extern IntPtr CreateCompatibleDC(IntPtr dc);
+        [DllImport("gdi32.dll")] public static extern bool DeleteDC(IntPtr dc);
+        [DllImport("gdi32.dll")] public static extern IntPtr SelectObject(IntPtr dc, IntPtr obj);
+        [DllImport("gdi32.dll")] public static extern bool DeleteObject(IntPtr obj);
+        [DllImport("user32.dll")] public static extern bool UpdateLayeredWindow(IntPtr h, IntPtr dst, ref POINT at, ref SIZE size, IntPtr src, ref POINT from, int key, ref BLENDFUNCTION blend, int flags);
+        [DllImport("user32.dll", EntryPoint = "UpdateLayeredWindow")] public static extern bool UpdateLayeredWindowAlpha(IntPtr h, IntPtr dst, IntPtr at, IntPtr size, IntPtr src, IntPtr from, int key, ref BLENDFUNCTION blend, int flags);
 
         public const uint INPUT_MOUSE = 0, INPUT_KEYBOARD = 1;
         public const uint KEYEVENTF_EXTENDEDKEY = 0x1, KEYEVENTF_KEYUP = 0x2, KEYEVENTF_UNICODE = 0x4;

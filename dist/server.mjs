@@ -17063,10 +17063,11 @@ function unknownOutcome(message) {
   return Object.assign(new Error(message), { unknownOutcome: true });
 }
 var Engine = class extends EventEmitter {
-  constructor({ dataDir, caption, timeoutMs, maxRestarts, restartWindowMs }) {
+  constructor({ dataDir, caption, overlayInFrames, timeoutMs, maxRestarts, restartWindowMs }) {
     super();
     this.dataDir = dataDir;
     this.caption = caption;
+    this.overlayInFrames = overlayInFrames === true;
     this.timeoutMs = timeoutMs;
     this.maxRestarts = maxRestarts;
     this.restartWindowMs = restartWindowMs;
@@ -17109,7 +17110,7 @@ var Engine = class extends EventEmitter {
     this.starting = (async () => {
       const exe = await this.executable();
       await new Promise((resolvePromise, rejectPromise) => {
-        const child = spawn(exe, ["--caption", Buffer.from(this.caption, "utf8").toString("base64")], { stdio: ["pipe", "pipe", "pipe"] });
+        const child = spawn(exe, ["--caption", Buffer.from(this.caption, "utf8").toString("base64"), ...this.overlayInFrames ? ["--overlay-in-frames"] : []], { stdio: ["pipe", "pipe", "pipe"] });
         let buffer = "";
         let ready = false;
         const timer = setTimeout(() => {
@@ -17306,11 +17307,14 @@ var Engine = class extends EventEmitter {
 };
 
 // src/plan.mjs
-var STEP_ACTIONS = ["click", "doubleClick", "rightClick", "middleClick", "move", "drag", "scroll", "type", "key", "focus", "wait", "waitFor", "window"];
+var STEP_ACTIONS = ["click", "doubleClick", "tripleClick", "rightClick", "middleClick", "move", "drag", "draw", "down", "up", "scroll", "type", "key", "focus", "wait", "waitFor", "window"];
 var RISKS = ["low", "medium", "high"];
 var ORDER = { low: 0, medium: 1, high: 2 };
-var POINTER = /* @__PURE__ */ new Set(["click", "doubleClick", "rightClick", "middleClick", "move"]);
-var ACTION_FIELDS = ["x", "y", "toX", "toY", "amount", "text", "key", "title", "hwnd", "button", "tolerant", "target", "role", "mode", "expect", "modifiers", "width", "height", "show"];
+var POINTER = /* @__PURE__ */ new Set(["click", "doubleClick", "tripleClick", "rightClick", "middleClick", "move"]);
+var MAX_GESTURE_MS = 15e3;
+var MAX_HOLD_MS = 12e4;
+var ACTION_FIELDS = ["x", "y", "toX", "toY", "amount", "text", "key", "title", "hwnd", "button", "tolerant", "target", "role", "mode", "expect", "modifiers", "width", "height", "show", "toTarget", "strokes", "smooth", "durationMs", "holdMs", "label"];
+var STEP_FIELDS = /* @__PURE__ */ new Set([...ACTION_FIELDS, "action", "ms", "settleMs", "risk", "riskNote"]);
 function validateSteps(steps, maxSteps) {
   if (!Array.isArray(steps) || steps.length === 0) throw new Error("desktop_sequence needs at least one step");
   if (steps.length > maxSteps) throw new Error(`desktop_sequence accepts at most ${maxSteps} steps (got ${steps.length}); split the batch`);
@@ -17319,9 +17323,12 @@ function validateSteps(steps, maxSteps) {
     if (step === null || typeof step !== "object" || Array.isArray(step)) throw new Error(`step ${n} must be an object`);
     const { action } = step;
     if (!STEP_ACTIONS.includes(action)) throw new Error(`step ${n} has unknown action ${JSON.stringify(action)}; use ${STEP_ACTIONS.join("/")}`);
+    const unknown2 = Object.keys(step).find((field) => !STEP_FIELDS.has(field));
+    if (unknown2 !== void 0) throw new Error(`step ${n} has unknown field ${JSON.stringify(unknown2)}`);
     const hasTarget = typeof step.target === "string" || Number.isInteger(step.target);
     if (POINTER.has(action) && !hasTarget && !(Number.isInteger(step.x) && Number.isInteger(step.y))) throw new Error(`step ${n} (${action}) needs x and y, or a target`);
-    if (action === "drag" && !(Number.isInteger(step.toX) && Number.isInteger(step.toY))) throw new Error(`step ${n} (drag) needs toX and toY`);
+    if (action === "drag" && step.toTarget === void 0 && !(Number.isInteger(step.toX) && Number.isInteger(step.toY))) throw new Error(`step ${n} (drag) needs toX and toY, or a toTarget`);
+    if (action === "draw" && !(Array.isArray(step.strokes) && step.strokes.length > 0 && step.strokes.every((stroke) => Array.isArray(stroke) && stroke.length > 0))) throw new Error(`step ${n} (draw) needs strokes: [[[x,y],[x,y],...], ...]`);
     if (action === "type" && typeof step.text !== "string") throw new Error(`step ${n} (type) needs text`);
     if (action === "key" && typeof step.key !== "string") throw new Error(`step ${n} (key) needs key`);
     if (action === "focus" && typeof step.title !== "string" && typeof step.hwnd !== "string") throw new Error(`step ${n} (focus) needs title or hwnd`);
@@ -17329,7 +17336,10 @@ function validateSteps(steps, maxSteps) {
     if (action === "waitFor" && (step.expect === null || typeof step.expect !== "object")) throw new Error(`step ${n} (waitFor) needs expect, e.g. {exists: 'OK'}`);
     if (action === "window" && typeof step.title !== "string" && typeof step.hwnd !== "string") throw new Error(`step ${n} (window) needs title or hwnd`);
     if (action === "window" && step.show === void 0 && step.x === void 0 && step.y === void 0 && step.width === void 0 && step.height === void 0) throw new Error(`step ${n} (window) needs show or x/y/width/height`);
-    if (step.modifiers !== void 0 && action === "move") throw new Error(`step ${n}: modifiers apply to clicks, drags and scroll`);
+    if (step.modifiers !== void 0 && (action === "move" || action === "down")) throw new Error(`step ${n}: modifiers apply to clicks, drags, draw and scroll; hold a key across steps with down`);
+    for (const [field, max] of [["durationMs", MAX_GESTURE_MS], ["holdMs", action === "down" ? MAX_HOLD_MS : MAX_GESTURE_MS]]) {
+      if (step[field] !== void 0 && !(Number.isInteger(step[field]) && step[field] >= 0 && step[field] <= max)) throw new Error(`step ${n}: ${field} must be between 0 and ${max}`);
+    }
     if (step.risk !== void 0 && !RISKS.includes(step.risk)) throw new Error(`step ${n} risk must be low, medium or high`);
     return step;
   });
@@ -17357,6 +17367,9 @@ function describeStep(step, index) {
   else if (Number.isInteger(step.target)) parts.push(`control #${step.target}`);
   else if (Number.isInteger(step.x) && Number.isInteger(step.y)) parts.push(`at ${step.x},${step.y}`);
   if (Number.isInteger(step.toX) && Number.isInteger(step.toY)) parts.push(`to ${step.toX},${step.toY}`);
+  if (step.toTarget !== void 0) parts.push(`onto ${typeof step.toTarget === "string" ? `'${step.toTarget}'` : `control #${step.toTarget}`}`);
+  if (Array.isArray(step.strokes)) parts.push(`${step.strokes.length} stroke(s)`);
+  if (typeof step.button === "string") parts.push(`${step.button} button`);
   if (step.modifiers !== void 0) parts.push(`with ${Array.isArray(step.modifiers) ? step.modifiers.join("+") : step.modifiers}`);
   if (Number.isInteger(step.width) || Number.isInteger(step.height)) parts.push(`size ${step.width ?? "?"}x${step.height ?? "?"}`);
   if (typeof step.show === "string") parts.push(step.show);
@@ -17364,6 +17377,8 @@ function describeStep(step, index) {
   if (typeof step.key === "string") parts.push(step.key);
   if (typeof step.text === "string") parts.push(JSON.stringify(step.text.length > 60 ? `${step.text.slice(0, 60)}\u2026` : step.text));
   if (Number.isInteger(step.ms)) parts.push(`${step.ms} ms`);
+  if (Number.isInteger(step.holdMs)) parts.push(`hold ${step.holdMs} ms`);
+  if (Number.isInteger(step.durationMs)) parts.push(`over ${step.durationMs} ms`);
   if (step.expect && typeof step.expect === "object") parts.push(`expect ${JSON.stringify(step.expect)}`);
   if (step.risk === "medium" || step.risk === "high") parts.push(`[${step.risk}${typeof step.riskNote === "string" ? `: ${step.riskNote}` : ""}]`);
   return parts.join(" ");
@@ -17378,34 +17393,36 @@ function foregroundText(fg) {
 function frameText(f, label = "frame") {
   const lines = [];
   if (f.unchanged === true) {
-    lines.push(`<${label} ${f.kind} area=${f.area} unchanged hash=${f.hash}>`);
-    lines.push("Nothing changed since the frame you already have of this area; its coordinates still apply. If you no longer have it (after compaction, or in a subagent), call again with forceImage: true.");
+    lines.push(`<${label} ${f.kind} area=${f.area} unchanged hash=${f.hash}> same as the frame you have; forceImage: true re-sends it.`);
   } else {
     const { captured: cap, delivered: del, origin: o } = f;
     lines.push(`<${label} ${f.kind} area=${f.area} hash=${f.hash}${f.changedOnly ? " changed-only" : ""}>`);
     const ox = o.x === 0 ? "" : `${o.x} + `;
     const oy = o.y === 0 ? "" : `${o.y} + `;
-    if (cap.w === del.w && cap.h === del.h) {
-      lines.push(`image ${del.w}x${del.h} is 1:1 with the screen: screen x = ${ox}image_x, screen y = ${oy}image_y.`);
-    } else {
-      lines.push(`image ${del.w}x${del.h} shows ${cap.w}x${cap.h} screen pixels: screen x = ${ox}image_x * ${r4(cap.w / del.w)}, screen y = ${oy}image_y * ${r4(cap.h / del.h)}. Ruler labels are already screen coordinates.`);
-    }
-    if (f.changedOnly) lines.push(`Only the region that changed since your last frame of ${f.area} is shown (screen ${o.x},${o.y} ${cap.w}x${cap.h}); the rest is as before.`);
+    if (cap.w === del.w && cap.h === del.h) lines.push(`image ${del.w}x${del.h} is 1:1 with the screen: screen x = ${ox}image_x, screen y = ${oy}image_y.`);
+    else lines.push(`image ${del.w}x${del.h} shows ${cap.w}x${cap.h} screen pixels: screen x = ${ox}image_x * ${r4(cap.w / del.w)}, screen y = ${oy}image_y * ${r4(cap.h / del.h)}.`);
   }
   lines.push(`foreground ${foregroundText(f.foreground)} \xB7 cursor ${f.cursor?.x},${f.cursor?.y}`);
   if (label === "frame" && Array.isArray(f.screens) && f.screens.length > 1) {
     lines.push(`screens ${f.screens.map((s) => `${s.primary ? "primary " : ""}${s.device} ${s.bounds}`).join("; ")}`);
   }
-  lines.push(`</${label}>`);
   return lines.join("\n");
+}
+function stateParts(a) {
+  const parts = [];
+  if (a.focused && a.focused !== a.control) parts.push(`focus ${a.focused}`);
+  if (a.foreground) parts.push(`fg ${quote(a.foreground.title)}`);
+  if (a.held) parts.push(`HOLDING ${a.held}`);
+  return parts;
 }
 function actionSummary(a) {
   const parts = [];
   if (a.control) parts.push(a.control);
+  if (a.drop) parts.push(`onto ${a.drop}`);
+  if (a.drew) parts.push(`drew ${a.drew}`);
   if (a.modifiers) parts.push(`with ${a.modifiers}`);
   if (a.action === "window" && a.window) parts.push(`window ${quote(a.window.title)} @ ${a.window.bounds}${a.window.maximized ? " maximized" : a.window.minimized ? " minimized" : ""}`);
-  if (a.focused) parts.push(`focus ${a.focused}`);
-  if (a.foreground) parts.push(`fg ${quote(a.foreground.title)}`);
+  parts.push(...stateParts(a));
   const extra = [];
   if (a.typed) extra.push(`typed: ${a.typed}`);
   if (a.expect) extra.push(`expect: ${a.expect}`);
@@ -17418,28 +17435,27 @@ function windowsText(a) {
     const flags = [w.foreground ? "foreground" : "", w.minimized ? "minimized" : "", w.maximized ? "maximized" : ""].filter(Boolean).join(",");
     lines.push(`${w.hwnd} ${quote(w.title)} (${w.process ?? "?"}) @ ${w.bounds}${flags ? ` [${flags}]` : ""}`);
   }
-  lines.push("</windows>");
   return lines.join("\n");
 }
 function controlsText(a) {
   const w = a.window ?? {};
   const lines = [`<controls window=${quote(w.title)} hwnd=${w.hwnd} shown=${a.kept} of=${a.total}${a.truncated ? " truncated" : ""}>`];
   for (const line of a.controls ?? []) lines.push(line);
-  if (a.total === 0) lines.push("(this window exposes no UI Automation tree; use screen_view)");
-  else if (a.kept === 0) lines.push(`(nothing operable on screen among ${a.total} elements; pass meaningfulOnly: false to see them all, or take a screenshot)`);
-  else if (a.kept < a.total) lines.push(`(${a.total - a.kept} hidden: not operable or off-screen; meaningfulOnly: false shows all. target: index or name clicks a control)`);
-  lines.push("</controls>");
+  if (a.total === 0) lines.push("(no UI Automation tree here; use screen_view)");
+  else if (a.kept === 0) lines.push("(nothing operable on screen; try meaningfulOnly: false or screen_view)");
   return lines.join("\n");
 }
 function actionText(a) {
   if (a.action === "windows") return windowsText(a);
   if (a.action === "controls") return controlsText(a);
   const { head, extra } = actionSummary(a);
-  return [`${a.action} ok${head ? ` \xB7 ${head}` : ""} \xB7 cursor ${a.cursor?.x},${a.cursor?.y}`, ...extra].join("\n");
+  return [`${a.action} ok${head ? ` \xB7 ${head}` : ""}`, ...extra].join("\n");
 }
 function sequenceText(s) {
   const ok = s.results.filter((r) => r.ok).length;
-  const lines = [`<batch risk=${s.risk}${s.confirmed ? " confirmed" : ""}${s.dryRun ? " dry-run" : ""} done=${ok}/${s.stepCount}${s.failed > 0 ? ` failed=${s.failed}` : ""}>`];
+  const risk = s.risk === "low" ? "" : ` risk=${s.risk}`;
+  const lines = [`<batch${risk}${s.confirmed ? " confirmed" : ""}${s.dryRun ? " dry-run" : ""} done=${ok}/${s.stepCount}${s.failed > 0 ? ` failed=${s.failed}` : ""}${s.ms === void 0 ? "" : ` ms=${s.ms}`}>`];
+  let last;
   for (const r of s.results) {
     if (s.dryRun) {
       lines.push(r.text);
@@ -17449,143 +17465,125 @@ function sequenceText(s) {
       lines.push(`#${r.n} ${r.action} FAILED ${r.ms}ms: ${r.error}`);
       continue;
     }
-    if (r.a === void 0) {
-      lines.push(`#${r.n} ${r.action} ok ${r.ms}ms`);
-      continue;
-    }
-    const { head, extra } = actionSummary(r.a);
-    lines.push(`#${r.n} ${r.action} ok ${r.ms}ms${head ? ` \xB7 ${head}` : ""}`);
-    for (const line of extra) lines.push(`   ${line}`);
+    if (r.a === void 0) continue;
+    last = r.a;
+    const notable = [...r.a.drew ? [`drew ${r.a.drew}`] : [], ...r.a.typed && !r.a.typed.startsWith("verified") ? [`typed: ${r.a.typed}`] : [], ...r.a.notes ?? []];
+    if (notable.length > 0) lines.push(`#${r.n} ${r.action}: ${notable.join("; ")}`);
   }
   if (s.stopped) lines.push(`stopped: ${s.stopped}`);
   if (s.notRun > 0) lines.push(`${s.notRun} step(s) not run`);
-  lines.push("</batch>");
+  if (last) lines.push(`now: ${stateParts(last).join(" \xB7 ")}`);
   return lines.join("\n");
 }
 
 // src/tools.mjs
-var CONTROL_ACTIONS = ["click", "doubleClick", "rightClick", "middleClick", "move", "drag", "scroll", "type", "key", "focus", "waitFor", "window", "windows", "controls"];
+var CONTROL_ACTIONS = ["click", "doubleClick", "tripleClick", "rightClick", "middleClick", "move", "drag", "draw", "down", "up", "scroll", "type", "key", "focus", "waitFor", "window", "windows", "controls"];
 var PASSIVE = /* @__PURE__ */ new Set(["windows", "controls", "waitFor"]);
 var expectSchema = {
   type: "object",
-  description: "Conditions that must hold after the action (polled until timeoutMs, default 1500; 5000 for waitFor). The step fails if they do not.",
+  description: "Must hold after the action or the step fails; polled up to timeoutMs (1500, waitFor 5000). exists/gone name a control.",
   properties: {
-    window: { type: "string", description: "A window with this title exists." },
-    foreground: { type: "string", description: "The window in front has this title." },
-    focused: { type: "string", description: "The focused control has this name." },
-    value: { type: "string", description: "The focused control contains this text." },
-    exists: { type: "string", description: "A control with this name is on screen (in the step window, else the front one)." },
-    gone: { type: "string", description: "No control with this name is on screen." },
+    window: { type: "string" },
+    foreground: { type: "string" },
+    focused: { type: "string" },
+    value: { type: "string" },
+    exists: { type: "string" },
+    gone: { type: "string" },
     timeoutMs: { type: "integer" }
   },
   additionalProperties: false
 };
-var actionProps = {
-  x: { type: "integer", description: "Screen x in physical pixels (window: new left edge)." },
-  y: { type: "integer", description: "Screen y in physical pixels (window: new top edge)." },
-  toX: { type: "integer", description: "drag end x; nonzero makes scroll horizontal." },
-  toY: { type: "integer", description: "drag end y." },
-  target: {
-    anyOf: [{ type: "integer" }, { type: "string" }],
-    description: "A control instead of x/y: an index from the last controls listing, or a control name (exact beats partial; add role if ambiguous). Disabled controls are refused."
-  },
-  role: { type: "string", description: "With a name target: Button, Edit, CheckBox, MenuItem, ListItem, TabItem..." },
-  text: { type: "string", description: "type: the text." },
-  mode: { type: "string", enum: ["paste", "keys"], description: "type: 'paste' (default, one insertion, clipboard restored) or 'keys' (Unicode keystrokes)." },
-  key: { type: "string", description: "key: 'enter', 'tab', 'esc', 'f5', 'ctrl+s', 'alt+tab', 'win+r'." },
-  amount: { type: "integer", description: "scroll notches, positive is up (default 3)." },
-  button: { type: "string", enum: ["left", "right", "middle"] },
-  modifiers: { type: "array", items: { type: "string", enum: ["ctrl", "shift", "alt", "win"] }, description: 'Keys held during a click, drag or scroll (e.g. ["ctrl"] to add to a selection); always released afterwards.' },
-  width: { type: "integer", description: "window: new width of the visible frame." },
-  height: { type: "integer", description: "window: new height." },
-  show: { type: "string", enum: ["minimize", "maximize", "restore"], description: "window: change its state." },
-  title: { type: "string", description: "Window title or process substring: input goes to it (brought to front first); focus and controls use it." },
-  hwnd: { type: "string", description: "Window handle (0x1094C) instead of title." },
-  tolerant: { type: "boolean", description: "focus: note a refused focus instead of failing." },
-  expect: expectSchema
-};
 var TOOLS = [
   {
     name: "screen_view",
-    title: "View screen",
-    description: 'See the live Windows desktop as a real image (per-monitor DPI aware, coordinate rulers in screen pixels). Defaults to the primary monitor; window frames one window (any window, by title or hwnd), region crops, screen "all" spans every monitor. An unchanged frame is not re-sent; diff sends only the changed region.',
+    description: "See the real Windows screen as an image. Default: primary monitor. Unchanged frames are not re-sent. Prefer desktop_control controls when you only need what is on screen.",
     inputSchema: {
       type: "object",
       properties: {
-        screen: { type: "string", description: "'primary' (default), 'all', or a monitor index." },
-        window: { type: "string", description: "Window title or process substring." },
-        hwnd: { type: "string", description: "Window handle." },
-        region: { type: "string", description: "'x,y,width,height' in screen pixels - also the way to zoom in." },
-        diff: { type: "boolean", description: "Send only the region that changed since your last frame of this area." },
-        maxEdge: { type: "integer", description: "Longest image side in pixels (default 1568); smaller is cheaper." },
-        includeCursor: { type: "boolean", description: "Mark the pointer (default true)." },
-        rulers: { type: "boolean", description: "Coordinate rulers (default true)." },
-        forceImage: { type: "boolean", description: "Send the full frame even if unchanged." }
+        screen: { type: "string", description: "'primary', 'all' or a monitor index." },
+        window: { type: "string", description: "Title or process substring." },
+        hwnd: { type: "string" },
+        region: { type: "string", description: "'x,y,w,h' in screen pixels; use it to zoom in." },
+        diff: { type: "boolean", description: "Only what changed since your last frame of this area." },
+        maxEdge: { type: "integer" },
+        includeCursor: { type: "boolean" },
+        rulers: { type: "boolean" },
+        forceImage: { type: "boolean", description: "Re-send an unchanged frame." }
       },
       additionalProperties: false
     },
-    annotations: { title: "View screen", readOnlyHint: true, openWorldHint: false }
+    annotations: { readOnlyHint: true, openWorldHint: false }
   },
   {
     name: "desktop_control",
-    title: "Desktop control",
-    description: `Operate the live Windows desktop: click (with modifiers for ctrl/shift-click), drag, scroll, type, keys, focus, waitFor, move/resize/minimize/maximize/restore a window, list windows, or read a window's UI Automation controls ("index [Role] 'Name' @ x,y WxH"). Click a control by index or name with target instead of guessing pixels. Every input action reports where input went (foreground window, focused control) and type reads the text back; expect makes the result checked. capture: true adds a frame (only what changed, when possible).`,
+    description: "Act on the real Windows desktop, or read it (windows, controls). x/y are physical screen pixels. Use target instead of pixels whenever a control exists. Results say where input went; type is read back.",
     inputSchema: {
       type: "object",
       properties: {
         action: { type: "string", enum: CONTROL_ACTIONS },
-        ...actionProps,
-        meaningfulOnly: { type: "boolean", description: "controls: only operable, on-screen controls (default true)." },
-        includeValues: { type: "boolean", description: "controls: include values (passwords masked)." },
-        settleMs: { type: "integer", description: "Wait after acting (default 0; with capture, the frame waits until the screen stops changing, up to this)." },
-        capture: { type: "boolean", description: "Return a frame after acting (default false)." },
+        x: { type: "integer" },
+        y: { type: "integer" },
+        toX: { type: "integer", description: "drag end; nonzero makes scroll horizontal." },
+        toY: { type: "integer" },
+        target: { type: ["integer", "string"], description: "Control index from controls, or its name." },
+        toTarget: { type: ["integer", "string"], description: "drag: drop on this control." },
+        role: { type: "string", description: "Disambiguates a name target: Button, Edit..." },
+        strokes: {
+          type: "array",
+          items: { type: "array", items: { type: "array", items: { type: "integer" } } },
+          description: "draw: strokes of [x,y] points; the button lifts between strokes."
+        },
+        smooth: { type: "boolean", description: "draw: curves, not straight lines." },
+        durationMs: { type: "integer", description: "drag, draw, move: speed, max 15000." },
+        holdMs: { type: "integer", description: "click, key: stay down this long. drag: pause first. down: auto-release after this (default 30000, max 120000)." },
+        text: { type: "string" },
+        mode: { type: "string", enum: ["paste", "keys"] },
+        key: { type: "string", description: "'enter', 'ctrl+s', 'win+r'. down/up: keys to hold or release; up alone releases everything." },
+        amount: { type: "integer", description: "scroll notches, + is up." },
+        button: { type: "string", enum: ["left", "right", "middle", "back", "forward"] },
+        modifiers: { type: "array", items: { type: "string", enum: ["ctrl", "shift", "alt", "win"] } },
+        width: { type: "integer" },
+        height: { type: "integer" },
+        show: { type: "string", enum: ["minimize", "maximize", "restore"] },
+        label: { type: "string", description: "Few words shown beside the pointer." },
+        title: { type: "string", description: "Window title or process substring; brought to front first." },
+        hwnd: { type: "string" },
+        tolerant: { type: "boolean", description: "focus: note a refusal instead of failing." },
+        expect: expectSchema,
+        bounds: { type: "boolean", description: "controls: add positions." },
+        meaningfulOnly: { type: "boolean", description: "controls: default true." },
+        includeValues: { type: "boolean" },
+        settleMs: { type: "integer" },
+        capture: { type: "boolean", description: "Add a frame of what changed." },
         forceImage: { type: "boolean" }
       },
       required: ["action"],
       additionalProperties: false
     },
-    annotations: { title: "Desktop control", readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
   },
   {
     name: "desktop_sequence",
-    title: "Desktop batch",
-    description: "Run several desktop_control actions in ONE call and look once at the end - the fast path. Steps run in order; the first failed step (including an unmet expect or a refused focus) stops the batch. Esc stops it. Declare risk: low runs freely; medium/high (batch or step) is refused without confirm: true, and with it the user is asked to approve. dryRun lists the plan.",
+    description: "Run many desktop_control actions in one call, the cheap way to work: one round trip, and it stops at the first failure. Esc stops it. Declare risk for anything that sends, deletes, pays or publishes; medium/high needs confirm: true after the user agrees.",
     inputSchema: {
       type: "object",
       properties: {
         steps: {
           type: "array",
-          items: {
-            type: "object",
-            properties: {
-              action: { type: "string", enum: STEP_ACTIONS },
-              ...actionProps,
-              ms: { type: "integer", description: "wait: milliseconds." },
-              settleMs: { type: "integer", description: "Pause after this step (default 100)." },
-              risk: { type: "string", enum: RISKS },
-              riskNote: { type: "string" }
-            },
-            required: ["action"],
-            additionalProperties: false
-          }
+          description: "Each step takes desktop_control's fields (not windows/controls), plus action 'wait' with ms, settleMs (default 100), risk, riskNote.",
+          items: { type: "object", properties: { action: { type: "string", enum: STEP_ACTIONS } }, required: ["action"] }
         },
-        risk: { type: "string", enum: RISKS, description: "Risk of the whole batch (default low)." },
-        confirm: { type: "boolean", description: "The user agreed to a medium/high batch." },
+        risk: { type: "string", enum: RISKS },
+        confirm: { type: "boolean" },
         dryRun: { type: "boolean" },
-        capture: { type: "string", enum: ["end", "none"], description: "end (default): one frame after the last step." },
-        target: { type: "string", enum: ["window", "screen", "all"], description: "End frame: the window in front (default), primary screen, or all monitors." },
+        capture: { type: "string", enum: ["none", "window", "screen", "all"], description: "Frame after the last step, changes only. Default none. 'window' is the one in front." },
         window: { type: "string", description: "Frame this window instead." },
-        region: { type: "string", description: "Crop the end frame: 'x,y,width,height'." },
-        diff: { type: "boolean", description: "End frame shows only what changed (default true)." },
-        maxEdge: { type: "integer" },
-        forceImage: { type: "boolean" },
-        stopOnError: { type: "boolean", description: "Default true. An unknown outcome or Esc always stops." },
-        settleMs: { type: "integer", description: "Max wait for the screen to settle before the end frame (default 1000)." }
+        region: { type: "string", description: "Frame 'x,y,w,h' instead." }
       },
       required: ["steps"],
       additionalProperties: false
     },
-    annotations: { title: "Desktop batch", readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
   }
 ];
 var failure2 = (text) => ({ isError: true, content: [{ type: "text", text }] });
@@ -17661,7 +17659,7 @@ function createHandlers(engine2, config3) {
     const payload = {
       op: "action",
       action: args.action,
-      ...pick2(args, [...ACTION_FIELDS, "meaningfulOnly", "includeValues"]),
+      ...pick2(args, [...ACTION_FIELDS, "meaningfulOnly", "includeValues", "bounds"]),
       settleMs: wantsFrame ? 0 : args.settleMs ?? 0
     };
     let result;
@@ -17755,25 +17753,22 @@ capture failed: ${error2.message}`;
       await banner(false);
     }
     summary.notRun = steps.length - summary.results.length;
+    summary.ms = Date.now() - started;
     let text = sequenceText(summary);
     let frame;
-    if (args.capture !== "none" && !interrupted) {
+    const wanted = args.capture ?? (typeof args.window === "string" || typeof args.region === "string" ? "window" : "none");
+    if (wanted !== "none" && !interrupted) {
       let target;
       if (typeof args.region === "string") target = { region: args.region };
       else if (typeof args.window === "string") target = { window: args.window };
-      else if (args.target === "screen") target = { screen: "primary" };
-      else if (args.target === "all") target = { screen: "all" };
+      else if (wanted === "screen") target = { screen: "primary" };
+      else if (wanted === "all") target = { screen: "all" };
       else {
         const last = [...summary.results].reverse().find((r) => r.a?.foreground?.hwnd);
         target = last ? { hwnd: last.a.foreground.hwnd } : { screen: "primary" };
       }
       try {
-        frame = await capture({ ...target, includeCursor: false }, extra, {
-          diff: args.diff !== false,
-          settleMaxMs: args.settleMs ?? config3.captureSettleMs,
-          forceImage: args.forceImage,
-          maxEdge: args.maxEdge
-        });
+        frame = await capture({ ...target, includeCursor: false }, extra, { diff: true, settleMaxMs: config3.captureSettleMs });
         text += `
 ${frameText(frame, "end-frame")}`;
       } catch (error2) {
@@ -17798,21 +17793,22 @@ function settings(env = process.env) {
     stepSettleMs: positive("DESK_PILOT_STEP_SETTLE_MS", 100),
     captureSettleMs: positive("DESK_PILOT_CAPTURE_SETTLE_MS", 1e3),
     maxSequenceSteps: positive("DESK_PILOT_MAX_SEQUENCE_STEPS", 24),
-    imageMaxEdge: positive("DESK_PILOT_IMAGE_MAX_EDGE", 1568),
+    imageMaxEdge: positive("DESK_PILOT_IMAGE_MAX_EDGE", 1356),
     imageMaxPixels: positive("DESK_PILOT_IMAGE_MAX_PIXELS", 115e4),
     dedupTtlMs: positive("DESK_PILOT_DEDUP_TTL_MS", 3e5),
     maxRestarts: positive("DESK_PILOT_ENGINE_MAX_RESTARTS", 3),
     restartWindowMs: positive("DESK_PILOT_ENGINE_RESTART_WINDOW_MS", 6e5),
     takeover: !off("DESK_PILOT_TAKEOVER"),
-    caption: env.DESK_PILOT_CAPTION || "Claude is operating this computer \xB7 Press Esc to cancel",
+    caption: env.DESK_PILOT_CAPTION || "Claude is in control \xB7 Esc to stop",
+    overlayInFrames: env.DESK_PILOT_OVERLAY_IN_FRAMES === "1",
     dataDir: env.DESK_PILOT_DATA_DIR || env.CLAUDE_PLUGIN_DATA || join2(env.LOCALAPPDATA ?? env.TEMP ?? ".", "desk-pilot")
   };
 }
-var INSTRUCTIONS = "Windows desktop control. screen_view sees the real screen; desktop_control acts (click, type, keys, focus, waitFor) and reads windows and UI Automation controls; desktop_sequence batches actions into one call. Use them to operate native Windows apps. Prefer controls and name/index targets over pixel guessing.";
+var INSTRUCTIONS = "Windows desktop control. Read controls, act by name or index, batch with desktop_sequence.";
 var config2 = settings();
 var engine = new Engine(config2);
 var handlers = createHandlers(engine, config2);
-var server = new Server({ name: "desk-pilot", version: "0.2.0" }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });
+var server = new Server({ name: "desk-pilot", version: "0.3.0" }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
 server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
   const handler = handlers[request.params.name];

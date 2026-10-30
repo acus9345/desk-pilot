@@ -139,11 +139,11 @@ namespace DeskPilot
             return s.Length <= max ? s : s.Substring(0, max) + "…";
         }
 
-        public static string Line(int index, Node n, bool includeValues)
+        public static string Line(int index, Node n, bool includeValues, bool bounds)
         {
             var sb = new StringBuilder();
             sb.Append(index).Append(" [").Append(n.Role).Append("] '").Append(Clip(n.Name, 80)).Append("'");
-            if (!n.Box.IsEmpty)
+            if (bounds && !n.Box.IsEmpty)
                 sb.Append(" @ ").Append((int)n.Box.X).Append(',').Append((int)n.Box.Y).Append(' ')
                   .Append((int)n.Box.Width).Append('x').Append((int)n.Box.Height);
             if (n.Name.Trim().Length == 0 && n.AutomationId.Length > 0) sb.Append(" id=").Append(Clip(n.AutomationId, 40));
@@ -158,7 +158,7 @@ namespace DeskPilot
         }
 
         /// <summary>The controls action: list a window's operable controls and remember the listing.</summary>
-        public static Dictionary<string, object> List(IntPtr window, bool meaningfulOnly, bool includeValues, Request req)
+        public static Dictionary<string, object> List(IntPtr window, bool meaningfulOnly, bool includeValues, bool bounds, Request req)
         {
             bool truncated;
             var all = ReadAll(window, out truncated);
@@ -173,7 +173,7 @@ namespace DeskPilot
             // none of what can be clicked now; name targets still search the whole tree.
             var kept = meaningfulOnly ? all.Where(n => IsOperable(n) && !n.Offscreen).ToList() : all;
             var lines = new List<object>();
-            for (int i = 0; i < kept.Count; i++) lines.Add(Line(i, kept[i], includeValues));
+            for (int i = 0; i < kept.Count; i++) lines.Add(Line(i, kept[i], includeValues, bounds));
             lock (listings)
             {
                 listings[window] = new Listing { Window = window, Nodes = kept };

@@ -81,10 +81,11 @@ function unknownOutcome(message) {
 }
 
 export class Engine extends EventEmitter {
-	constructor({ dataDir, caption, timeoutMs, maxRestarts, restartWindowMs }) {
+	constructor({ dataDir, caption, overlayInFrames, timeoutMs, maxRestarts, restartWindowMs }) {
 		super();
 		this.dataDir = dataDir;
 		this.caption = caption;
+		this.overlayInFrames = overlayInFrames === true;
 		this.timeoutMs = timeoutMs;
 		this.maxRestarts = maxRestarts;
 		this.restartWindowMs = restartWindowMs;
@@ -131,7 +132,7 @@ export class Engine extends EventEmitter {
 		this.starting = (async () => {
 			const exe = await this.executable();
 			await new Promise((resolvePromise, rejectPromise) => {
-				const child = spawn(exe, ['--caption', Buffer.from(this.caption, 'utf8').toString('base64')], { stdio: ['pipe', 'pipe', 'pipe'] });
+				const child = spawn(exe, ['--caption', Buffer.from(this.caption, 'utf8').toString('base64'), ...(this.overlayInFrames ? ['--overlay-in-frames'] : [])], { stdio: ['pipe', 'pipe', 'pipe'] });
 				let buffer = '';
 				let ready = false;
 				const timer = setTimeout(() => {

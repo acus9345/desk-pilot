@@ -6,7 +6,7 @@
     {
       "name": "desk-pilot",
       "source": "./",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "description": "Windows desktop control: screen_view, desktop_control, desktop_sequence."
     }
   ]

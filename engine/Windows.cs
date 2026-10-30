@@ -55,9 +55,11 @@ namespace DeskPilot
             return name;
         }
 
+        static readonly uint OwnPid = (uint)Process.GetCurrentProcess().Id;
+
         static bool IsOwn(IntPtr h)
         {
-            return Program.Banner != null && Program.Banner.IsHandleCreated && h == Program.Banner.Handle;
+            return Pid(h) == OwnPid; // the overlay's windows
         }
 
         /// <summary>Candidate windows: visible, titled, not our banner.</summary>

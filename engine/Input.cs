@@ -1,6 +1,9 @@
 // desk-pilot engine - mouse, keyboard and text input through SendInput.
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
@@ -42,47 +45,164 @@ namespace DeskPilot
             if (!Native.SetCursorPos(x, y)) throw new InvalidOperationException("the pointer could not be moved to " + x + "," + y);
         }
 
-        static uint DownFlag(string button)
+        static INPUT Button(string button, bool down)
         {
-            switch (button) { case "right": return 0x0008; case "middle": return 0x0020; default: return 0x0002; }
+            switch (button)
+            {
+                case "right": return Mouse(down ? 0x0008u : 0x0010u, 0);
+                case "middle": return Mouse(down ? 0x0020u : 0x0040u, 0);
+                case "back": return Mouse(down ? 0x0080u : 0x0100u, 1);
+                case "forward": return Mouse(down ? 0x0080u : 0x0100u, 2);
+                default: return Mouse(down ? 0x0002u : 0x0004u, 0);
+            }
         }
 
-        static uint UpFlag(string button)
-        {
-            switch (button) { case "right": return 0x0010; case "middle": return 0x0040; default: return 0x0004; }
-        }
-
-        public static void Click(string button, int count, Request req)
+        public static void Click(string button, int count, int holdMs, Request req)
         {
             for (int i = 0; i < count; i++)
             {
                 req.Check();
-                Send(Mouse(DownFlag(button), 0), Mouse(UpFlag(button), 0));
+                if (holdMs > 0)
+                {
+                    Send(Button(button, true));
+                    try { req.Sleep(holdMs); }
+                    finally { Send(Button(button, false)); }
+                }
+                else Send(Button(button, true), Button(button, false));
                 if (i + 1 < count) Thread.Sleep(45);
             }
         }
 
-        /// <summary>Drag in small steps; the button is released whatever happens.</summary>
-        public static void Drag(int fromX, int fromY, int toX, int toY, string button, Request req)
+        // Pointer paths: one event every few pixels at about mouse speed. Windows merges moves
+        // an app has not read yet, so a faster pace would flatten curves into chords.
+        public const int MaxGestureMs = 15000;
+        const int StepPx = 6;
+        const double PxPerMs = 1.0;
+
+        static double Dist(Point a, Point b)
         {
-            MoveTo(fromX, fromY);
-            Thread.Sleep(30);
-            Send(Mouse(DownFlag(button), 0));
-            try
+            double dx = b.X - a.X, dy = b.Y - a.Y;
+            return Math.Sqrt(dx * dx + dy * dy);
+        }
+
+        static double Length(List<Point> path)
+        {
+            double total = 0;
+            for (int i = 0; i + 1 < path.Count; i++) total += Dist(path[i], path[i + 1]);
+            return total;
+        }
+
+        static int Pace(double px)
+        {
+            return (int)Math.Max(120, Math.Min(MaxGestureMs, px / PxPerMs));
+        }
+
+        static int Curve(int a, int b, int c, int d, double t)
+        {
+            return (int)Math.Round(0.5 * (2 * b + (c - a) * t + (2 * a - 5 * b + 4 * c - d) * t * t + (3 * b - a - 3 * c + d) * t * t * t));
+        }
+
+        /// <summary>Fill in a stroke: straight segments, or a Catmull-Rom curve through the points.</summary>
+        static List<Point> Trace(List<Point> points, bool smooth)
+        {
+            var path = new List<Point> { points[0] };
+            for (int i = 0; i + 1 < points.Count; i++)
             {
-                int steps = Math.Max(8, Math.Min(60, (int)(Math.Sqrt((toX - fromX) * (double)(toX - fromX) + (toY - fromY) * (double)(toY - fromY)) / 12)));
+                Point a = points[Math.Max(0, i - 1)], b = points[i], c = points[i + 1], d = points[Math.Min(points.Count - 1, i + 2)];
+                int steps = Math.Max(1, (int)Math.Ceiling(Dist(b, c) / StepPx));
                 for (int s = 1; s <= steps; s++)
                 {
-                    req.Check();
-                    MoveTo(fromX + (toX - fromX) * s / steps, fromY + (toY - fromY) * s / steps);
-                    Thread.Sleep(8);
+                    double t = s / (double)steps;
+                    var q = smooth
+                        ? new Point(Curve(a.X, b.X, c.X, d.X, t), Curve(a.Y, b.Y, c.Y, d.Y, t))
+                        : new Point(b.X + (int)Math.Round((c.X - b.X) * t), b.Y + (int)Math.Round((c.Y - b.Y) * t));
+                    if (q != path[path.Count - 1]) path.Add(q);
                 }
+            }
+            return path;
+        }
+
+        /// <summary>A real move event: raw-input apps never see SetCursorPos.</summary>
+        static void Slide(Point p)
+        {
+            int left = Native.GetSystemMetrics(76), top = Native.GetSystemMetrics(77);
+            int width = Native.GetSystemMetrics(78), height = Native.GetSystemMetrics(79);
+            var move = Mouse(0x0001 | 0x4000 | 0x8000, 0); // MOVE | VIRTUALDESK | ABSOLUTE
+            move.u.mi.dx = (int)(((long)(p.X - left) * 65536 + width - 1) / width);
+            move.u.mi.dy = (int)(((long)(p.Y - top) * 65536 + height - 1) / height);
+            Send(move);
+        }
+
+        /// <summary>Follow a path on schedule. Sleep has ~15 ms resolution, so the last stretch of each wait spins.</summary>
+        static void Walk(List<Point> path, int ms, Request req)
+        {
+            int count = path.Count - 1;
+            var clock = Stopwatch.StartNew();
+            for (int i = 1; i <= count; i++)
+            {
+                long due = ms * (long)i / count;
+                long left = due - clock.ElapsedMilliseconds;
+                if (left > 20) req.Sleep((int)left - 16);
+                while (clock.ElapsedMilliseconds < due) { req.Check(); Thread.Yield(); }
+                req.Check();
+                Slide(path[i]);
+            }
+            POINT now;
+            var end = path[count];
+            if (Native.GetCursorPos(out now) && (now.X != end.X || now.Y != end.Y)) MoveTo(end.X, end.Y);
+        }
+
+        /// <summary>Press, follow the path, release. The button comes up whatever happens.</summary>
+        static void Stroke(List<Point> path, string button, int dwellMs, int ms, Request req)
+        {
+            MoveTo(path[0].X, path[0].Y);
+            Thread.Sleep(15);
+            Send(Button(button, true));
+            try
+            {
+                if (dwellMs > 0) req.Sleep(dwellMs);
+                Walk(path, ms, req);
                 Thread.Sleep(30);
             }
             finally
             {
-                Send(Mouse(UpFlag(button), 0));
+                Send(Button(button, false));
             }
+        }
+
+        public static void Drag(int fromX, int fromY, int toX, int toY, string button, int holdMs, int? durationMs, Request req)
+        {
+            var path = Trace(new List<Point> { new Point(fromX, fromY), new Point(toX, toY) }, false);
+            Stroke(path, button, holdMs, durationMs ?? Pace(Length(path)), req);
+        }
+
+        /// <summary>Each stroke is one press-move-release. durationMs spans all of them, shared by length.</summary>
+        public static int Draw(List<List<Point>> strokes, bool smooth, string button, int? durationMs, Request req)
+        {
+            var paths = new List<List<Point>>();
+            double total = 0;
+            foreach (var stroke in strokes)
+            {
+                var path = Trace(stroke, smooth);
+                paths.Add(path);
+                total += Length(path);
+            }
+            int ms = durationMs ?? Pace(total);
+            foreach (var path in paths)
+            {
+                req.Check();
+                Stroke(path, button, 0, total > 0 ? (int)(ms * Length(path) / total) : 0, req);
+            }
+            return (int)total;
+        }
+
+        /// <summary>Travel to a point through every step between, as a hand would.</summary>
+        public static void Glide(int x, int y, int? durationMs, Request req)
+        {
+            POINT at;
+            if (!Native.GetCursorPos(out at)) throw new InvalidOperationException("the pointer position could not be read");
+            var path = Trace(new List<Point> { new Point(at.X, at.Y), new Point(x, y) }, false);
+            Walk(path, durationMs ?? Pace(Length(path)), req);
         }
 
         public static void Wheel(int notches, bool horizontal)
@@ -150,6 +270,27 @@ namespace DeskPilot
             return list;
         }
 
+        /// <summary>The keys in "w" or "shift+w", for down and up.</summary>
+        public static List<ushort> KeyList(string spec)
+        {
+            var list = new List<ushort>();
+            foreach (var part in spec.Split('+'))
+            {
+                var name = part.Trim();
+                if (name.Length == 0) continue;
+                ushort vk;
+                if (!names.TryGetValue(name, out vk))
+                {
+                    short scan = name.Length == 1 ? Native.VkKeyScanW(name[0]) : (short)-1;
+                    if (scan == -1) throw new ArgumentException("unknown key '" + name + "'");
+                    vk = (ushort)(scan & 0xFF);
+                }
+                if (!list.Contains(vk)) list.Add(vk);
+            }
+            if (list.Count == 0) throw new ArgumentException("key '" + spec + "' names no key");
+            return list;
+        }
+
         public static void Press(List<ushort> keys)
         {
             if (keys.Count == 0) return;
@@ -167,8 +308,184 @@ namespace DeskPilot
             try { Send(seq.ToArray()); } catch { }
         }
 
-        /// <summary>"ctrl+shift+s", "alt+tab", "enter", "f5", "win+r", "ctrl++".</summary>
-        public static void Chord(string spec)
+        // Keys and buttons held across calls by down and up. They come up on up, Esc, a cancel,
+        // engine exit or the holdMs deadline; a killed engine leaves a marker file so the next
+        // one can release them. While anything is held the banner, and so Esc, stays up.
+        static readonly object heldLock = new object();
+        static readonly List<ushort> heldKeys = new List<ushort>();
+        static readonly List<string> heldButtons = new List<string>();
+        static System.Threading.Timer holdTimer;
+        static string expired;
+
+        public static bool ButtonHeld { get { lock (heldLock) return heldButtons.Count > 0; } }
+
+        static string KeyName(ushort vk)
+        {
+            foreach (var kv in names) if (kv.Value == vk) return kv.Key;
+            return ((Keys)vk).ToString().ToLowerInvariant();
+        }
+
+        /// <summary>What is held right now, or null.</summary>
+        public static string Held()
+        {
+            lock (heldLock)
+            {
+                var all = new List<string>(heldButtons);
+                foreach (var k in heldKeys) all.Add(KeyName(k));
+                return all.Count == 0 ? null : string.Join(", ", all.ToArray());
+            }
+        }
+
+        /// <summary>What a holdMs deadline released since the last call, or null.</summary>
+        public static string TakeExpired()
+        {
+            lock (heldLock)
+            {
+                var gone = expired;
+                expired = null;
+                return gone;
+            }
+        }
+
+        static string Marker()
+        {
+            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "held-" + Process.GetCurrentProcess().Id + ".txt");
+        }
+
+        static void HeldChanged(int limitMs)
+        {
+            bool any = heldKeys.Count + heldButtons.Count > 0;
+            try
+            {
+                if (any)
+                {
+                    var lines = new List<string>();
+                    foreach (var k in heldKeys) lines.Add("k" + k);
+                    foreach (var b in heldButtons) lines.Add("b" + b);
+                    File.WriteAllLines(Marker(), lines);
+                }
+                else File.Delete(Marker());
+            }
+            catch { }
+            if (!any && holdTimer != null) { holdTimer.Dispose(); holdTimer = null; }
+            if (any && limitMs > 0)
+            {
+                if (holdTimer == null) holdTimer = new System.Threading.Timer(delegate { Expire(); });
+                holdTimer.Change(limitMs, Timeout.Infinite);
+            }
+            Program.PinBanner(any);
+        }
+
+        static void Expire()
+        {
+            lock (heldLock)
+            {
+                expired = Held();
+                LetGoAll();
+            }
+        }
+
+        public static void HoldButton(string button, int limitMs)
+        {
+            lock (heldLock)
+            {
+                if (!heldButtons.Contains(button))
+                {
+                    Send(Button(button, true));
+                    heldButtons.Add(button);
+                }
+                HeldChanged(limitMs);
+            }
+        }
+
+        public static void HoldKeys(List<ushort> keys, int limitMs)
+        {
+            lock (heldLock)
+            {
+                var fresh = NotHeld(keys);
+                Press(fresh);
+                heldKeys.AddRange(fresh);
+                HeldChanged(limitMs);
+            }
+        }
+
+        /// <summary>Drop what is already held down, so a gesture's own release cannot let go of it.</summary>
+        public static List<ushort> NotHeld(List<ushort> keys)
+        {
+            lock (heldLock) return keys.FindAll(k => !heldKeys.Contains(k));
+        }
+
+        /// <summary>Release the named key(s) or button, or everything. False if none of it was held.</summary>
+        public static bool LetGo(string keySpec, string button)
+        {
+            lock (heldLock)
+            {
+                if (keySpec == null && button == null)
+                {
+                    bool any = heldKeys.Count + heldButtons.Count > 0;
+                    LetGoAll();
+                    return any;
+                }
+                bool released = false;
+                if (button != null && heldButtons.Remove(button))
+                {
+                    Send(Button(button, false));
+                    released = true;
+                }
+                if (keySpec != null)
+                {
+                    var keys = KeyList(keySpec).FindAll(k => heldKeys.Contains(k));
+                    Release(keys);
+                    heldKeys.RemoveAll(k => keys.Contains(k));
+                    released |= keys.Count > 0;
+                }
+                HeldChanged(0);
+                return released;
+            }
+        }
+
+        /// <summary>Never throws: it runs on Esc, cancels and process exit.</summary>
+        public static void LetGoAll()
+        {
+            lock (heldLock)
+            {
+                if (heldKeys.Count + heldButtons.Count == 0) return;
+                foreach (var b in heldButtons) { try { Send(Button(b, false)); } catch { } }
+                Release(heldKeys);
+                heldButtons.Clear();
+                heldKeys.Clear();
+                HeldChanged(0);
+            }
+        }
+
+        /// <summary>A killed engine cannot release anything, so the next one does, from its marker.</summary>
+        public static void ReleaseOrphans()
+        {
+            try
+            {
+                foreach (var file in Directory.GetFiles(AppDomain.CurrentDomain.BaseDirectory, "held-*.txt"))
+                {
+                    int pid;
+                    if (!int.TryParse(Path.GetFileNameWithoutExtension(file).Substring(5), out pid) || Running(pid)) continue;
+                    foreach (var line in File.ReadAllLines(file))
+                    {
+                        if (line.StartsWith("k")) Send(VkEvent(ushort.Parse(line.Substring(1)), true));
+                        else if (line.StartsWith("b")) Send(Button(line.Substring(1), false));
+                    }
+                    File.Delete(file);
+                }
+            }
+            catch { }
+        }
+
+        static bool Running(int pid)
+        {
+            try { return !Process.GetProcessById(pid).HasExited; }
+            catch { return false; }
+        }
+
+        /// <summary>"ctrl+shift+s", "alt+tab", "enter", "f5", "win+r", "ctrl++". holdMs keeps it down, repeating like a real key.</summary>
+        public static void Chord(string spec, int holdMs = 0, Request req = null)
         {
             if (string.IsNullOrWhiteSpace(spec)) throw new ArgumentException("key needs a key name or chord such as 'ctrl+s'");
             spec = spec.Trim();
@@ -205,6 +522,23 @@ namespace DeskPilot
                 // caller said what they meant (ctrl+S is ctrl+s).
                 shiftForChar = mods.Count == 0 && ((scan >> 8) & 1) != 0;
                 if (shiftForChar) mods.Add(0x10);
+            }
+            if (holdMs > 0)
+            {
+                var keys = new List<ushort>(mods);
+                keys.Add(main);
+                Press(keys);
+                try
+                {
+                    var clock = Stopwatch.StartNew();
+                    while (clock.ElapsedMilliseconds < holdMs)
+                    {
+                        req.Sleep(Math.Min(33, holdMs - (int)clock.ElapsedMilliseconds));
+                        if (clock.ElapsedMilliseconds >= 400) Send(VkEvent(main, false));
+                    }
+                }
+                finally { Release(keys); }
+                return;
             }
             var seq = new List<INPUT>();
             foreach (var m in mods) seq.Add(VkEvent(m, false));
