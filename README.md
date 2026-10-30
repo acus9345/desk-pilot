@@ -1,6 +1,7 @@
 # desk-pilot
 
-**Windows only.** A Claude Code plugin that gives Claude eyes and hands on the real Windows desktop: it sees the actual screen, reads each window's controls, and drives the real mouse and keyboard.
+**Windows only.** A Claude Code plugin(or any other agentic tool i guess)  that gives Claude eyes and hands on the real Windows desktop: it sees the actual screen, reads each window's controls, and drives the real mouse and keyboard.
+<img width="1280" height="800" alt="image" src="https://github.com/user-attachments/assets/54c10b93-e0e1-4aa8-84a0-a5545b8017b4" />
 
 Three tools (deliberately three: every schema costs tokens):
 
