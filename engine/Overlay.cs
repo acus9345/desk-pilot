@@ -165,7 +165,7 @@ namespace DeskPilot
             using (var glow = EdgeGlow(screen.Bounds.Width, screen.Bounds.Height, (int)(72 * scale)))
                 edge.Present(glow, screen.Bounds.Left, screen.Bounds.Top, 255);
             haloSize = (int)(350 * scale);
-            using (var soft = PointerHalo(haloSize)) halo.Present(soft, 0, 0, 255);
+            using (var soft = PointerHalo(haloSize, scale)) halo.Present(soft, 0, 0, 255);
             DrawBar();
             lastX = int.MinValue;
             Tick();
@@ -368,8 +368,9 @@ namespace DeskPilot
             return FromPixels(pixels, width, height);
         }
 
-        /// <summary>The soft white light around the pointer.</summary>
-        static Bitmap PointerHalo(int size)
+        /// <summary>The soft white light around the pointer, and ego lite's dark arrow over it, tip on the hot spot.
+        /// The arrow also keeps the pointer in screenshots, which leave the real one out.</summary>
+        static Bitmap PointerHalo(int size, float scale)
         {
             var pixels = new int[size * size];
             double radius = size / 2.0;
@@ -381,7 +382,18 @@ namespace DeskPilot
                     if (r < 1) pixels[y * size + x] = (int)(92 * Math.Pow(1 - r, 3)) << 24 | 0xFFFFFF;
                 }
             }
-            return FromPixels(pixels, size, size);
+            var image = FromPixels(pixels, size, size);
+            using (var g = Graphics.FromImage(image))
+            using (var fill = new SolidBrush(Color.FromArgb(18, 18, 20)))
+            using (var outline = new Pen(Color.White, 1.6f * scale) { LineJoin = LineJoin.Round })
+            {
+                Smooth(g);
+                float c = size / 2f, s = scale;
+                var arrow = new[] { new PointF(c, c), new PointF(c + 17 * s, c + 6.5f * s), new PointF(c + 9 * s, c + 9 * s), new PointF(c + 6.5f * s, c + 17 * s) };
+                g.FillPolygon(fill, arrow);
+                g.DrawPolygon(outline, arrow);
+            }
+            return image;
         }
     }
 }

@@ -1,7 +1,7 @@
 {
   "name": "desk-pilot",
   "displayName": "desk-pilot (Windows desktop control)",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Windows only. Eyes and hands on the real desktop: screen_view returns real screenshots, desktop_control clicks/types and reads UI Automation controls by name, desktop_sequence runs checked batches in one call. Esc cancels.",
   "author": { "name": "acus9345" },
   "homepage": "https://github.com/acus9345/desk-pilot",
