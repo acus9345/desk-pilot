@@ -1,0 +1,19 @@
+[package]
+name = "desk-pilot"
+version = "0.3.2"
+edition = "2024"
+description = "MCP server that gives AI agents eyes and hands on the real Windows desktop. Windows only; needs Node 22.19+."
+license = "MIT"
+repository = "https://github.com/acus9345/desk-pilot"
+readme = "README.md"
+keywords = ["mcp", "windows", "desktop", "automation", "claude"]
+categories = ["command-line-utilities"]
+autobins = false
+include = ["/Cargo.toml", "/Cargo.lock", "/LICENSE", "/README.md", "/rust/**", "/dist/server.mjs", "/engine/*.cs"]
+
+[[bin]]
+name = "desk-pilot"
+path = "rust/main.rs"
+
+[package.metadata.docs.rs]
+targets = ["x86_64-pc-windows-msvc"]

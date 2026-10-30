@@ -68,6 +68,15 @@ or inside an interactive `claude` session: `/plugin marketplace add acus9345/des
 
 From a checkout, without installing: `claude --plugin-dir path\to\desk-pilot`.
 
+As a standalone MCP server, for any MCP client:
+
+```bash
+cargo install desk-pilot
+claude mcp add desk-pilot -- desk-pilot
+```
+
+This is a small Rust launcher that carries the same server and engine, and it still needs Node 22.19+ on `PATH`. You get the three tools only: no skill, and no `PreToolUse` hook, so `confirm: true` runs a risky batch without the approval prompt the plugin shows.
+
 Requirements: Windows 10 2004 or later / Windows 11, Node 22.19+ on `PATH`. Nothing else to install: on first use the plugin compiles its engine with the C# compiler that ships with .NET Framework 4.x in every Windows 10/11 install (~0.2 s), caches it by source hash, and reuses it.
 
 ## How it works
@@ -132,7 +141,7 @@ npm run build
 node test/e2e.mjs
 ```
 
-`dist/server.mjs` is committed so the plugin installs without `npm install`; rebuild after editing `src/`. The engine recompiles itself whenever `engine/*.cs` changes. `test/e2e.mjs` needs an interactive desktop and only ever touches windows it creates itself.
+`dist/server.mjs` is committed so the plugin installs without `npm install`; rebuild after editing `src/`. The crate in `rust/` bundles `dist/` and `engine/`, so `cargo build && node test/crate.mjs` checks it end to end. The engine recompiles itself whenever `engine/*.cs` changes. `test/e2e.mjs` needs an interactive desktop and only ever touches windows it creates itself.
 
 ## License
 
