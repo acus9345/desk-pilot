@@ -7,8 +7,8 @@ import { actionText, frameText, sequenceText } from './format.mjs';
  * the how-to lives in the plugin's skill.
  */
 
-const CONTROL_ACTIONS = ['click', 'doubleClick', 'tripleClick', 'rightClick', 'middleClick', 'move', 'drag', 'draw', 'down', 'up', 'scroll', 'type', 'key', 'focus', 'waitFor', 'window', 'windows', 'controls'];
-const PASSIVE = new Set(['windows', 'controls', 'waitFor']);
+const CONTROL_ACTIONS = ['click', 'doubleClick', 'tripleClick', 'rightClick', 'middleClick', 'move', 'drag', 'draw', 'down', 'up', 'scroll', 'type', 'key', 'focus', 'waitFor', 'window', 'launch', 'clipboard', 'windows', 'controls', 'screens'];
+const PASSIVE = new Set(['windows', 'controls', 'screens', 'waitFor']);
 
 const expectSchema = {
 	type: 'object',
@@ -40,6 +40,7 @@ export const TOOLS = [
 				maxEdge: { type: 'integer' },
 				includeCursor: { type: 'boolean' },
 				rulers: { type: 'boolean' },
+				annotate: { type: 'boolean', description: 'Box and number the controls of the window; target takes the number.' },
 				forceImage: { type: 'boolean', description: 'Re-send an unchanged frame.' }
 			},
 			additionalProperties: false
@@ -68,7 +69,10 @@ export const TOOLS = [
 				smooth: { type: 'boolean', description: 'draw: curves, not straight lines.' },
 				durationMs: { type: 'integer', description: 'drag, draw, move: speed, max 15000.' },
 				holdMs: { type: 'integer', description: 'click, key: stay down this long. drag: pause first. down: auto-release after this (default 30000, max 120000).' },
-				text: { type: 'string' },
+				text: { type: 'string', description: 'type: the text. clipboard: set it; omit to read.' },
+				app: { type: 'string', description: 'launch: Start Menu name, program, path or URL.' },
+				args: { type: 'string' },
+				cwd: { type: 'string' },
 				mode: { type: 'string', enum: ['paste', 'keys'] },
 				key: { type: 'string', description: "'enter', 'ctrl+s', 'win+r'. down/up: keys to hold or release; up alone releases everything." },
 				amount: { type: 'integer', description: 'scroll notches, + is up.' },
@@ -152,12 +156,12 @@ export function createHandlers(engine, config) {
 
 	/** One frame, deduplicated against the frame the model already has of the same area. */
 	async function capture(target, extra, { diff = false, settleMaxMs = 0, forceImage = false, maxEdge } = {}) {
-		const key = JSON.stringify([target.screen ?? null, target.window ?? null, target.hwnd ?? null, target.region ?? null]);
+		const key = JSON.stringify([target.screen ?? null, target.window ?? null, target.hwnd ?? null, target.region ?? null, target.annotate === true]);
 		const sent = lastSent.get(key);
 		const payload = {
 			op: 'capture',
 			key,
-			...pick(target, ['screen', 'window', 'hwnd', 'region', 'includeCursor', 'rulers']),
+			...pick(target, ['screen', 'window', 'hwnd', 'region', 'includeCursor', 'rulers', 'annotate']),
 			maxEdge: Number.isInteger(maxEdge) ? Math.max(200, maxEdge) : config.imageMaxEdge,
 			maxPixels: config.imageMaxPixels,
 			diff,

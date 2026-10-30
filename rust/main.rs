@@ -17,6 +17,7 @@ const MIN_NODE: (u32, u32) = (22, 19);
 const SERVER: &[u8] = include_bytes!("../dist/server.mjs");
 const ENGINE: &[(&str, &[u8])] = &[
     ("Actions.cs", include_bytes!("../engine/Actions.cs")),
+    ("Apps.cs", include_bytes!("../engine/Apps.cs")),
     ("Capture.cs", include_bytes!("../engine/Capture.cs")),
     ("Input.cs", include_bytes!("../engine/Input.cs")),
     ("Native.cs", include_bytes!("../engine/Native.cs")),

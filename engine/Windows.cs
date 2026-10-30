@@ -63,7 +63,7 @@ namespace DeskPilot
         }
 
         /// <summary>Candidate windows: visible, titled, not our banner.</summary>
-        static IEnumerable<IntPtr> Candidates()
+        public static IEnumerable<IntPtr> Candidates()
         {
             foreach (var h in TopLevel())
             {
@@ -224,6 +224,10 @@ namespace DeskPilot
                     s["primary"] = (info.dwFlags & 1) != 0;
                     var b = info.rcMonitor;
                     s["bounds"] = b.Left + "," + b.Top + "," + (b.Right - b.Left) + "," + (b.Bottom - b.Top);
+                    var w = info.rcWork;
+                    s["work"] = w.Left + "," + w.Top + "," + (w.Right - w.Left) + "," + (w.Bottom - w.Top);
+                    uint dpiX, dpiY;
+                    if (Native.GetDpiForMonitor(m, 0, out dpiX, out dpiY) == 0) s["scale"] = (int)Math.Round(dpiX / 96.0 * 100);
                     s["l"] = b.Left; s["t"] = b.Top; s["r"] = b.Right; s["b"] = b.Bottom;
                     list.Add(s);
                 }

@@ -65,7 +65,7 @@ namespace DeskPilot
 
         // As long as a quick human press. A press and release in one instant is missed by canvases
         // that sample input once per frame.
-        const int PressMs = 40, ArriveMs = 25;
+        const int PressMs = 40, ArriveMs = 25, MaxClipboardRead = 8000;
 
         /// <summary>Move, give the app a moment to see the pointer arrive, click.</summary>
         public static void ClickAt(int x, int y, string button, int count, int holdMs, Request req)
@@ -620,6 +620,33 @@ namespace DeskPilot
                     catch { }
                 });
             }
+        }
+
+        public static void WriteClipboard(string text)
+        {
+            Program.OnSta(delegate { SetClipboardText(text); });
+        }
+
+        /// <summary>What is on the clipboard as text, cut to a length that is safe to send.</summary>
+        public static string ReadClipboard()
+        {
+            string found = null;
+            Program.OnSta(delegate
+            {
+                if (Clipboard.ContainsText()) found = Clipboard.GetText();
+                else if (Clipboard.ContainsFileDropList())
+                {
+                    var names = new List<string>();
+                    foreach (var name in Clipboard.GetFileDropList()) names.Add(name);
+                    found = "(files) " + string.Join("; ", names.ToArray());
+                }
+                else if (Clipboard.ContainsImage())
+                {
+                    using (var image = Clipboard.GetImage()) found = "(image " + image.Width + "x" + image.Height + ")";
+                }
+            });
+            if (found == null) return "(empty)";
+            return found.Length <= MaxClipboardRead ? found : found.Substring(0, MaxClipboardRead) + "… (" + found.Length + " characters in all)";
         }
 
         static void SetClipboardText(string text)

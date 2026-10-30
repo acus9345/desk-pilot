@@ -533,6 +533,9 @@ check('an interrupted draw stops and lifts the button', cutLine.startsWith('up L
 const fullFrame = textOf(primary).match(/shows (\d+)x(\d+) screen pixels/u).slice(1).map(Number);
 const barRegion = `${Math.round(fullFrame[0] / 2) - 420},${fullFrame[1] - 260},840,240`;
 const regionHash = async (client) => textOf(await call(client, 'screen_view', { region: barRegion, includeCursor: false, rulers: false, forceImage: true })).match(/hash=(\w+)/u)[1];
+// Over a still window: any live window in the region would change the hash by itself.
+const coverRegion = barRegion.split(',').map(Number);
+await call(a.client, 'desktop_control', { action: 'window', title: canvasTitle, x: coverRegion[0] - 20, y: coverRegion[1] - 50, width: coverRegion[2] + 40, height: coverRegion[3] + 70 });
 await call(a.client, 'desktop_control', { action: 'focus', title: canvasTitle });
 await sleep(2600); // the overlay's linger, so it is really gone
 const quiet = await regionHash(a.client);
@@ -563,6 +566,64 @@ const fgAfter = textOf(await call(bar.client, 'desktop_control', { action: 'wind
 check('and taking that click did not steal the foreground', /\[foreground/u.test(fgAfter), fgAfter.split('\n')[1]);
 await bar.client.close();
 await sleep(300);
+await call(a.client, 'desktop_control', { action: 'window', title: canvasTitle, x: padX - 19, y: padY - 53, width: 722, height: 411 });
+
+// launching: a throwaway form started through the tool, with its arguments and folder
+const launchedTitle = `desk-launched ${stamp}`;
+const launchedFile = join(work, 'launched.txt');
+const launchedScript = join(work, 'launched.ps1');
+writeFileSync(launchedScript, `\uFEFFAdd-Type -AssemblyName System.Windows.Forms
+$f = New-Object System.Windows.Forms.Form; $f.Text = '${launchedTitle}'
+$f.Add_Shown({ [System.IO.File]::WriteAllText('${launchedFile}', ($PID.ToString() + '|' + (Get-Location).Path + '|' + $args[0])) })
+[System.Windows.Forms.Application]::Run($f)
+`, 'utf8');
+const launched = await call(a.client, 'desktop_control', { action: 'launch', app: 'powershell.exe', args: `-NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "${launchedScript}"`, cwd: work, expect: { window: launchedTitle, timeoutMs: 8000 } });
+for (let waited = 0; !existsSync(launchedFile) && waited < 5000; waited += 100) await sleep(100);
+const [launchedPid, launchedCwd] = existsSync(launchedFile) ? readFileSync(launchedFile, 'utf8').split('|') : [];
+check('launch starts a program with its arguments and working folder', !launched.isError && launchedCwd === work, `${launchedCwd} / ${textOf(launched).split('\n')[0]}`);
+if (launchedPid) kill(Number(launchedPid));
+const noApp = await call(a.client, 'desktop_control', { action: 'launch', app: 'no-such-app-xyz' });
+check('launching an unknown app is refused with no dialog', noApp.isError === true && /no app named 'no-such-app-xyz'/u.test(textOf(noApp)), textOf(noApp).slice(0, 110));
+
+// the clipboard is the person's: a helper keeps every format, as a paste does, and puts it back
+const original = textOf(await call(a.client, 'desktop_control', { action: 'clipboard' }));
+const clipSaved = join(work, 'clip-saved.txt');
+const clipGo = join(work, 'clip-go.txt');
+const clipScript = join(work, 'clip.ps1');
+writeFileSync(clipScript, `\uFEFFAdd-Type -AssemblyName System.Windows.Forms
+$d = [System.Windows.Forms.Clipboard]::GetDataObject(); $s = New-Object System.Windows.Forms.DataObject
+if ($d -ne $null) { foreach ($f in $d.GetFormats($false)) { try { $v = $d.GetData($f, $false); if ($v -ne $null) { $s.SetData($f, $false, $v) } } catch { } } }
+[System.IO.File]::WriteAllText('${clipSaved}', 'saved')
+while (-not (Test-Path '${clipGo}')) { Start-Sleep -Milliseconds 50 }
+[System.Windows.Forms.Clipboard]::SetDataObject($s, $true, 5, 40)
+`, 'utf8');
+const clipHelper = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-WindowStyle', 'Hidden', '-File', clipScript], { stdio: 'ignore' });
+const clipDone = new Promise((resolvePromise) => clipHelper.on('close', resolvePromise));
+for (let waited = 0; !existsSync(clipSaved) && waited < 8000; waited += 50) await sleep(50);
+const marker = `desk clipboard ${stamp} café`;
+await call(a.client, 'desktop_control', { action: 'clipboard', text: marker });
+const readBack = textOf(await call(a.client, 'desktop_control', { action: 'clipboard' }));
+const batched = textOf(await call(a.client, 'desktop_sequence', { steps: [{ action: 'clipboard' }] }));
+writeFileSync(clipGo, 'go');
+await clipDone;
+check('clipboard text can be set and read back', readBack === `clipboard: ${marker}`, readBack);
+check('and a batch reports what it read', batched.includes(`clipboard: ${marker}`));
+const restored = textOf(await call(a.client, 'desktop_control', { action: 'clipboard' }));
+check('the test puts the clipboard back as it was', restored === original, restored.slice(0, 60));
+
+const screensOut = textOf(await call(a.client, 'desktop_control', { action: 'screens' }));
+check('screens lists the monitors with work area and scale', new RegExp(`^\\d+ \\S+ primary 0,0,${fullFrame[0]},${fullFrame[1]} work 0,0,\\d+,\\d+ \\d+%$`, 'mu').test(screensOut), screensOut.split('\n')[1]);
+
+const numbered = await call(a.client, 'screen_view', { window: title, annotate: true, includeCursor: false, rulers: false });
+writeFileSync(join(work, 'numbered.png'), Buffer.from(imageOf(numbered)?.data ?? '', 'base64'));
+check('annotate numbers the controls on the frame', /\d+ controls numbered/u.test(textOf(numbered)) && imageOf(numbered) !== undefined, textOf(numbered).split('\n').find((l) => l.includes('numbered')));
+const again2 = await call(a.client, 'screen_view', { window: title, annotate: true, includeCursor: false, rulers: false });
+check('an annotated frame is sent even if the screen has not changed', imageOf(again2) !== undefined);
+before = log().length;
+const byNumber = Number(controls.match(/^(\d+) \[Button\] 'Alpha'/mu)?.[1]);
+await call(a.client, 'desktop_control', { action: 'click', title, target: byNumber });
+await sleep(250);
+check('a number from the frame works as a target', log().slice(before).includes('click Alpha'), log().slice(before).join(' | '));
 
 // input an app can notice: Paint lost the press after a move and instant clicks before these
 const rawCount = () => (existsSync(rawFile) ? Number(readFileSync(rawFile, 'utf8')) : 0);

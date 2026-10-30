@@ -34,6 +34,28 @@ namespace DeskPilot
                     r["windows"] = Win.List(P.Str(p, "title"));
                     break;
 
+                case "screens":
+                    r["screens"] = Win.Screens();
+                    break;
+
+                case "clipboard":
+                    {
+                        var text = P.Str(p, "text");
+                        if (text != null) Input.WriteClipboard(text);
+                        else r["clipboard"] = Input.ReadClipboard();
+                        break;
+                    }
+
+                case "launch":
+                    {
+                        var app = P.Str(p, "app");
+                        if (string.IsNullOrWhiteSpace(app)) throw new ArgumentException("launch needs app: a Start Menu name, a program, or a path");
+                        var opened = Apps.Launch(app.Trim(), P.Str(p, "args"), P.Str(p, "cwd"), req);
+                        if (opened != null) r["opened"] = opened;
+                        else notes.Add("no new window within 6 s: it may have reused an open window, or have none");
+                        break;
+                    }
+
                 case "controls":
                     {
                         window = Win.Resolve(p);
@@ -125,7 +147,7 @@ namespace DeskPilot
 
             req.Sleep(P.Int(p, "settleMs") ?? 0);
 
-            if (action != "windows" && action != "controls")
+            if (action != "windows" && action != "controls" && action != "screens" && action != "clipboard")
             {
                 var focused = Uia.Focused();
                 if (focused != null) r["focused"] = Uia.Describe(focused);

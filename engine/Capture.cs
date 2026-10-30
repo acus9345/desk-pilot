@@ -144,6 +144,16 @@ namespace DeskPilot
             rect.Intersect(VirtualScreen());
             if (rect.Width <= 0 || rect.Height <= 0) throw new ArgumentException("the area to capture is off-screen");
 
+            // Read the controls first: the numbers must be the ones the next target: index means.
+            bool annotate = P.Bool(p, "annotate", false);
+            var boxes = new List<System.Windows.Rect>();
+            if (annotate)
+            {
+                var listed = window != IntPtr.Zero ? window : Native.GetForegroundWindow();
+                Uia.List(listed, true, false, false, req);
+                boxes = Uia.ListedBoxes(listed);
+            }
+
             // Settle: grab until two consecutive grabs agree (the UI stopped repainting) or the
             // budget runs out. A static screen costs one extra grab, not a fixed sleep.
             var started = DateTime.UtcNow;
@@ -171,7 +181,7 @@ namespace DeskPilot
 
             var key = P.Str(p, "key") ?? (kind + ":" + rect.X + "," + rect.Y + "," + rect.Width + "," + rect.Height);
             var baseHash = P.Str(p, "baseHash");
-            bool force = P.Bool(p, "force", false);
+            bool force = annotate || P.Bool(p, "force", false);
             var previous = Lookup(key);
             Store(new Frame { Key = key, W = rect.Width, H = rect.Height, Pixels = px, Hash = hash });
 
@@ -244,6 +254,7 @@ namespace DeskPilot
                         g.SmoothingMode = SmoothingMode.AntiAlias;
                         if (P.Bool(p, "includeCursor", true)) DrawCursor(g, originX, originY, sx, sy, dw, dh);
                         if (P.Bool(p, "rulers", true)) DrawRulers(g, originX, originY, sx, sy, dw, dh);
+                        if (annotate) result["numbered"] = DrawNumbers(g, boxes, originX, originY, sx, sy, dw, dh);
                     }
                     using (var ms = new MemoryStream())
                     {
@@ -261,6 +272,36 @@ namespace DeskPilot
                 return result;
             }
             finally { bmp.Dispose(); }
+        }
+
+        /// <summary>A box and its listing number on each control. Rows stacked on one spot (a list
+        /// item and the button inside it) show only the first, or the labels would cover each other.</summary>
+        static int DrawNumbers(Graphics g, List<System.Windows.Rect> boxes, int ox, int oy, double sx, double sy, int dw, int dh)
+        {
+            int drawn = 0;
+            var used = new List<RectangleF>();
+            using (var font = new Font("Segoe UI", 12f, FontStyle.Bold, GraphicsUnit.Pixel))
+            using (var line = new Pen(Color.FromArgb(235, 255, 150, 0), 1.5f))
+            using (var plate = new SolidBrush(Color.FromArgb(235, 20, 20, 20)))
+            {
+                for (int i = 0; i < boxes.Count; i++)
+                {
+                    var b = boxes[i];
+                    if (b.IsEmpty) continue;
+                    var r = new RectangleF((float)((b.X - ox) * sx), (float)((b.Y - oy) * sy), (float)(b.Width * sx), (float)(b.Height * sy));
+                    if (r.Right < 0 || r.Bottom < 0 || r.Left >= dw || r.Top >= dh) continue;
+                    if (used.Exists(u => Math.Abs(u.X - r.X) < 6 && Math.Abs(u.Y - r.Y) < 6)) continue;
+                    used.Add(r);
+                    g.DrawRectangle(line, r.X, r.Y, r.Width, r.Height);
+                    var text = i.ToString(CultureInfo.InvariantCulture);
+                    var size = g.MeasureString(text, font);
+                    float x = Math.Max(0, r.X), y = Math.Max(0, r.Y);
+                    g.FillRectangle(plate, x, y, size.Width - 2, size.Height - 2);
+                    g.DrawString(text, font, Brushes.White, x - 2, y - 1);
+                    drawn++;
+                }
+            }
+            return drawn;
         }
 
         static void DrawCursor(Graphics g, int ox, int oy, double sx, double sy, int dw, int dh)

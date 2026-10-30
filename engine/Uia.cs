@@ -188,6 +188,16 @@ namespace DeskPilot
             return r;
         }
 
+        /// <summary>The rows of a window's last listing, for drawing their numbers on a frame.</summary>
+        public static List<Rect> ListedBoxes(IntPtr window)
+        {
+            lock (listings)
+            {
+                Listing listing;
+                return listings.TryGetValue(window, out listing) ? listing.Nodes.Select(n => n.Box).ToList() : new List<Rect>();
+            }
+        }
+
         public static IntPtr LastListedWindow()
         {
             lock (listings) { return lastListed; }

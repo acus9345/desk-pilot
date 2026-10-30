@@ -16,6 +16,10 @@ Everything happens on the person's real screen, mouse and keyboard. Windows only
 - `target: "Save"` (add `role: "Button"` if several match) clicks a control by name; `target: 4` uses an index from the last listing. Both re-find the control right before clicking, refuse a disabled one, scroll it into view if needed, and fail loudly if the listing went stale.
 - `type` with a `target` focuses that control first. Text goes in as one paste (clipboard restored); `mode: "keys"` types keystrokes instead.
 - `modifiers: ["ctrl"]` or `["shift"]` on a click adds to or extends a selection (files, list rows); they are released after the click.
+- `{action: "launch", app: "Notepad"}` starts an app by Start Menu name, program, path or URL, and reports the window it opened. Add `args` and `cwd` for programs.
+- `{action: "clipboard"}` reads the clipboard, and `text` sets it.
+- `{action: "screens"}` lists monitors; the index is what `screen_view` takes as `screen`.
+- `screen_view` with `annotate: true` boxes and numbers a window's controls on the image, and `target` takes the number. Use it when names alone do not tell controls apart.
 - `{action: "window", title, x, y, width, height}` places a window's visible frame; `show: "minimize" | "maximize" | "restore"` changes its state. Arrange windows before a task so controls are on screen.
 - `{action: "draw", strokes: [[[x,y],[x,y],...], ...], smooth: true}` draws in the app in front; the button lifts between strokes, and `button: "right"` draws with the right button. Compute the points yourself, and keep them few: each one costs tokens, and `smooth` curves through them.
 - `drag` takes `target` and `toTarget` to move one control onto another, and `durationMs` for apps that need a slower drag.

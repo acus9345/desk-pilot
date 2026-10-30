@@ -17316,13 +17316,13 @@ var Engine = class extends EventEmitter {
 };
 
 // src/plan.mjs
-var STEP_ACTIONS = ["click", "doubleClick", "tripleClick", "rightClick", "middleClick", "move", "drag", "draw", "down", "up", "scroll", "type", "key", "focus", "wait", "waitFor", "window"];
+var STEP_ACTIONS = ["click", "doubleClick", "tripleClick", "rightClick", "middleClick", "move", "drag", "draw", "down", "up", "scroll", "type", "key", "focus", "wait", "waitFor", "window", "launch", "clipboard"];
 var RISKS = ["low", "medium", "high"];
 var ORDER = { low: 0, medium: 1, high: 2 };
 var POINTER = /* @__PURE__ */ new Set(["click", "doubleClick", "tripleClick", "rightClick", "middleClick", "move"]);
 var MAX_GESTURE_MS = 15e3;
 var MAX_HOLD_MS = 12e4;
-var ACTION_FIELDS = ["x", "y", "toX", "toY", "amount", "text", "key", "title", "hwnd", "button", "tolerant", "target", "role", "mode", "expect", "modifiers", "width", "height", "show", "toTarget", "strokes", "smooth", "durationMs", "holdMs", "label"];
+var ACTION_FIELDS = ["x", "y", "toX", "toY", "amount", "text", "key", "title", "hwnd", "button", "tolerant", "target", "role", "mode", "expect", "modifiers", "width", "height", "show", "toTarget", "strokes", "smooth", "durationMs", "holdMs", "label", "app", "args", "cwd"];
 var STEP_FIELDS = /* @__PURE__ */ new Set([...ACTION_FIELDS, "action", "ms", "settleMs", "risk", "riskNote"]);
 function validateSteps(steps, maxSteps) {
   if (!Array.isArray(steps) || steps.length === 0) throw new Error("desktop_sequence needs at least one step");
@@ -17338,6 +17338,7 @@ function validateSteps(steps, maxSteps) {
     if (POINTER.has(action) && !hasTarget && !(Number.isInteger(step.x) && Number.isInteger(step.y))) throw new Error(`step ${n} (${action}) needs x and y, or a target`);
     if (action === "drag" && step.toTarget === void 0 && !(Number.isInteger(step.toX) && Number.isInteger(step.toY))) throw new Error(`step ${n} (drag) needs toX and toY, or a toTarget`);
     if (action === "draw" && !(Array.isArray(step.strokes) && step.strokes.length > 0 && step.strokes.every((stroke) => Array.isArray(stroke) && stroke.length > 0))) throw new Error(`step ${n} (draw) needs strokes: [[[x,y],[x,y],...], ...]`);
+    if (action === "launch" && typeof step.app !== "string") throw new Error(`step ${n} (launch) needs app`);
     if (action === "type" && typeof step.text !== "string") throw new Error(`step ${n} (type) needs text`);
     if (action === "key" && typeof step.key !== "string") throw new Error(`step ${n} (key) needs key`);
     if (action === "focus" && typeof step.title !== "string" && typeof step.hwnd !== "string") throw new Error(`step ${n} (focus) needs title or hwnd`);
@@ -17382,6 +17383,7 @@ function describeStep(step, index) {
   if (step.modifiers !== void 0) parts.push(`with ${Array.isArray(step.modifiers) ? step.modifiers.join("+") : step.modifiers}`);
   if (Number.isInteger(step.width) || Number.isInteger(step.height)) parts.push(`size ${step.width ?? "?"}x${step.height ?? "?"}`);
   if (typeof step.show === "string") parts.push(step.show);
+  if (typeof step.app === "string") parts.push(`'${step.app}'${typeof step.args === "string" ? ` ${step.args}` : ""}`);
   if (typeof step.title === "string") parts.push(`in '${step.title}'`);
   if (typeof step.key === "string") parts.push(step.key);
   if (typeof step.text === "string") parts.push(JSON.stringify(step.text.length > 60 ? `${step.text.slice(0, 60)}\u2026` : step.text));
@@ -17411,12 +17413,14 @@ function frameText(f, label = "frame") {
     if (cap.w === del.w && cap.h === del.h) lines.push(`image ${del.w}x${del.h} is 1:1 with the screen: screen x = ${ox}image_x, screen y = ${oy}image_y.`);
     else lines.push(`image ${del.w}x${del.h} shows ${cap.w}x${cap.h} screen pixels: screen x = ${ox}image_x * ${r4(cap.w / del.w)}, screen y = ${oy}image_y * ${r4(cap.h / del.h)}.`);
   }
+  if (f.numbered !== void 0) lines.push(`${f.numbered} controls numbered: target takes the number.`);
   lines.push(`foreground ${foregroundText(f.foreground)} \xB7 cursor ${f.cursor?.x},${f.cursor?.y}`);
   if (label === "frame" && Array.isArray(f.screens) && f.screens.length > 1) {
     lines.push(`screens ${f.screens.map((s) => `${s.primary ? "primary " : ""}${s.device} ${s.bounds}`).join("; ")}`);
   }
   return lines.join("\n");
 }
+var windowLine = (w) => `${w.hwnd} ${quote(w.title)} (${w.process ?? "?"}) @ ${w.bounds}`;
 function stateParts(a) {
   const parts = [];
   if (a.focused && a.focused !== a.control) parts.push(`focus ${a.focused}`);
@@ -17430,6 +17434,7 @@ function actionSummary(a) {
   if (a.drop) parts.push(`onto ${a.drop}`);
   if (a.drew) parts.push(`drew ${a.drew}`);
   if (a.modifiers) parts.push(`with ${a.modifiers}`);
+  if (a.opened) parts.push(`opened ${windowLine(a.opened)}`);
   if (a.action === "window" && a.window) parts.push(`window ${quote(a.window.title)} @ ${a.window.bounds}${a.window.maximized ? " maximized" : a.window.minimized ? " minimized" : ""}`);
   parts.push(...stateParts(a));
   const extra = [];
@@ -17446,6 +17451,9 @@ function windowsText(a) {
   }
   return lines.join("\n");
 }
+function screensText(a) {
+  return ["<screens>", ...(a.screens ?? []).map((s, i) => `${i} ${s.device}${s.primary ? " primary" : ""} ${s.bounds} work ${s.work}${s.scale ? ` ${s.scale}%` : ""}`)].join("\n");
+}
 function controlsText(a) {
   const w = a.window ?? {};
   const lines = [`<controls window=${quote(w.title)} hwnd=${w.hwnd} shown=${a.kept} of=${a.total}${a.truncated ? " truncated" : ""}>`];
@@ -17457,6 +17465,8 @@ function controlsText(a) {
 function actionText(a) {
   if (a.action === "windows") return windowsText(a);
   if (a.action === "controls") return controlsText(a);
+  if (a.action === "screens") return screensText(a);
+  if (a.clipboard !== void 0) return `clipboard: ${a.clipboard}`;
   const { head, extra } = actionSummary(a);
   return [`${a.action} ok${head ? ` \xB7 ${head}` : ""}`, ...extra].join("\n");
 }
@@ -17476,7 +17486,7 @@ function sequenceText(s) {
     }
     if (r.a === void 0) continue;
     last = r.a;
-    const notable = [...r.a.drew ? [`drew ${r.a.drew}`] : [], ...r.a.typed && !r.a.typed.startsWith("verified") ? [`typed: ${r.a.typed}`] : [], ...r.a.notes ?? []];
+    const notable = [...r.a.drew ? [`drew ${r.a.drew}`] : [], ...r.a.opened ? [`opened ${windowLine(r.a.opened)}`] : [], ...r.a.clipboard === void 0 ? [] : [`clipboard: ${r.a.clipboard}`], ...r.a.typed && !r.a.typed.startsWith("verified") ? [`typed: ${r.a.typed}`] : [], ...r.a.notes ?? []];
     if (notable.length > 0) lines.push(`#${r.n} ${r.action}: ${notable.join("; ")}`);
   }
   if (s.stopped) lines.push(`stopped: ${s.stopped}`);
@@ -17486,8 +17496,8 @@ function sequenceText(s) {
 }
 
 // src/tools.mjs
-var CONTROL_ACTIONS = ["click", "doubleClick", "tripleClick", "rightClick", "middleClick", "move", "drag", "draw", "down", "up", "scroll", "type", "key", "focus", "waitFor", "window", "windows", "controls"];
-var PASSIVE = /* @__PURE__ */ new Set(["windows", "controls", "waitFor"]);
+var CONTROL_ACTIONS = ["click", "doubleClick", "tripleClick", "rightClick", "middleClick", "move", "drag", "draw", "down", "up", "scroll", "type", "key", "focus", "waitFor", "window", "launch", "clipboard", "windows", "controls", "screens"];
+var PASSIVE = /* @__PURE__ */ new Set(["windows", "controls", "screens", "waitFor"]);
 var expectSchema = {
   type: "object",
   description: "Must hold after the action or the step fails; polled up to timeoutMs (1500, waitFor 5000). exists/gone name a control.",
@@ -17517,6 +17527,7 @@ var TOOLS = [
         maxEdge: { type: "integer" },
         includeCursor: { type: "boolean" },
         rulers: { type: "boolean" },
+        annotate: { type: "boolean", description: "Box and number the controls of the window; target takes the number." },
         forceImage: { type: "boolean", description: "Re-send an unchanged frame." }
       },
       additionalProperties: false
@@ -17545,7 +17556,10 @@ var TOOLS = [
         smooth: { type: "boolean", description: "draw: curves, not straight lines." },
         durationMs: { type: "integer", description: "drag, draw, move: speed, max 15000." },
         holdMs: { type: "integer", description: "click, key: stay down this long. drag: pause first. down: auto-release after this (default 30000, max 120000)." },
-        text: { type: "string" },
+        text: { type: "string", description: "type: the text. clipboard: set it; omit to read." },
+        app: { type: "string", description: "launch: Start Menu name, program, path or URL." },
+        args: { type: "string" },
+        cwd: { type: "string" },
         mode: { type: "string", enum: ["paste", "keys"] },
         key: { type: "string", description: "'enter', 'ctrl+s', 'win+r'. down/up: keys to hold or release; up alone releases everything." },
         amount: { type: "integer", description: "scroll notches, + is up." },
@@ -17623,12 +17637,12 @@ function createHandlers(engine2, config3) {
   const lastSent = /* @__PURE__ */ new Map();
   const options = (extra) => ({ signal: extra?.signal, timeoutMs: config3.timeoutMs });
   async function capture(target, extra, { diff = false, settleMaxMs = 0, forceImage = false, maxEdge } = {}) {
-    const key = JSON.stringify([target.screen ?? null, target.window ?? null, target.hwnd ?? null, target.region ?? null]);
+    const key = JSON.stringify([target.screen ?? null, target.window ?? null, target.hwnd ?? null, target.region ?? null, target.annotate === true]);
     const sent = lastSent.get(key);
     const payload = {
       op: "capture",
       key,
-      ...pick2(target, ["screen", "window", "hwnd", "region", "includeCursor", "rulers"]),
+      ...pick2(target, ["screen", "window", "hwnd", "region", "includeCursor", "rulers", "annotate"]),
       maxEdge: Number.isInteger(maxEdge) ? Math.max(200, maxEdge) : config3.imageMaxEdge,
       maxPixels: config3.imageMaxPixels,
       diff,
@@ -17817,7 +17831,7 @@ var INSTRUCTIONS = "Windows desktop control. Read controls, act by name or index
 var config2 = settings();
 var engine = new Engine(config2);
 var handlers = createHandlers(engine, config2);
-var server = new Server({ name: "desk-pilot", version: "0.3.2" }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });
+var server = new Server({ name: "desk-pilot", version: "0.4.0" }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
 server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
   const handler = handlers[request.params.name];

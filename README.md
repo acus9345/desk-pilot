@@ -11,7 +11,7 @@ Three tools (deliberately three: every schema costs tokens):
 | tool | what it does |
 | --- | --- |
 | `screen_view` | the live screen, a window (any window, by title or handle) or a region, as a real image with coordinate rulers |
-| `desktop_control` | click (also Ctrl/Shift/Alt-click, triple-click, long press), drag (also onto a control), draw freehand, hold a button or key across steps, scroll, type, keys, focus, waitFor, move/resize/minimize/maximize/restore a window, list windows, read a window's UI Automation controls |
+| `desktop_control` | click (also Ctrl/Shift/Alt-click, triple-click, long press), drag (also onto a control), draw freehand, hold a button or key across steps, scroll, type, keys, focus, waitFor, launch apps, read and set the clipboard, move/resize/minimize/maximize/restore a window, list windows and monitors, read a window's UI Automation controls |
 | `desktop_sequence` | many actions in one call, checked step by step, with one frame at the end |
 
 ## Token cost compared with Windows-MCP
@@ -36,7 +36,7 @@ Measured on 2026-10-30, 0.2.0 against the current code, on the same machine:
 
 | | 0.2.0 | now |
 | --- | --- | --- |
-| All three tool schemas | 10,371 characters | 5,323 characters, with more actions |
+| All three tool schemas | 10,371 characters | 5,686 characters, with more actions |
 | Frame after a batch | always | only when asked for |
 | `controls` on the test window | 671 characters | 337 characters |
 
@@ -90,6 +90,8 @@ Requirements: Windows 10 2004 or later / Windows 11, Node 22.19+ on `PATH`. Noth
 **Checked actions.** Every input action reports where input actually went (the window in front and the control with keyboard focus). `type` reads the text back (`verified` / `NOT verified` / `unknown`). Any step can carry `expect`, for example `{foreground: "Save As"}`, `{exists: "OK"}`, `{gone: "Loading"}` or `{value: "hello"}`: the step waits for it and fails if it never happens. `waitFor` is a step that only waits.
 
 **Modifier clicks and window layout.** `modifiers: ["ctrl"]` (or `shift`, `alt`, `win`) holds keys for exactly one click, drag or scroll, and always releases them, so a stuck Ctrl can never turn later input into shortcuts. `action: "window"` moves and resizes a window's *visible* frame (the rectangle `windows` reports, without Windows' invisible resize border), or minimizes, maximizes and restores it; it checks the result and says so when an app snaps itself to a different size.
+
+**Starting apps, the clipboard, numbered controls.** `launch` starts an app by Start Menu name, program, path or URL, with `args` and `cwd` for programs, and reports the window it opened. `clipboard` reads or sets the clipboard; a read is cut at 8,000 characters. `screens` lists monitors with work area and scale. `annotate: true` on `screen_view` boxes a window's controls on the image and numbers them, and `target` takes the number.
 
 **Input apps can notice.** The pointer moves with real input events, and a click stays down for 40 ms, because canvases such as Paint's ignore instant clicks and pointer jumps.
 

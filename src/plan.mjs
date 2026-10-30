@@ -3,14 +3,14 @@
  * server and the PreToolUse hook so the two can never disagree about what is risky.
  */
 
-export const STEP_ACTIONS = ['click', 'doubleClick', 'tripleClick', 'rightClick', 'middleClick', 'move', 'drag', 'draw', 'down', 'up', 'scroll', 'type', 'key', 'focus', 'wait', 'waitFor', 'window'];
+export const STEP_ACTIONS = ['click', 'doubleClick', 'tripleClick', 'rightClick', 'middleClick', 'move', 'drag', 'draw', 'down', 'up', 'scroll', 'type', 'key', 'focus', 'wait', 'waitFor', 'window', 'launch', 'clipboard'];
 export const RISKS = ['low', 'medium', 'high'];
 const ORDER = { low: 0, medium: 1, high: 2 };
 const POINTER = new Set(['click', 'doubleClick', 'tripleClick', 'rightClick', 'middleClick', 'move']);
 const MAX_GESTURE_MS = 15000;
 const MAX_HOLD_MS = 120000;
 /** Fields a step forwards to the engine. */
-export const ACTION_FIELDS = ['x', 'y', 'toX', 'toY', 'amount', 'text', 'key', 'title', 'hwnd', 'button', 'tolerant', 'target', 'role', 'mode', 'expect', 'modifiers', 'width', 'height', 'show', 'toTarget', 'strokes', 'smooth', 'durationMs', 'holdMs', 'label'];
+export const ACTION_FIELDS = ['x', 'y', 'toX', 'toY', 'amount', 'text', 'key', 'title', 'hwnd', 'button', 'tolerant', 'target', 'role', 'mode', 'expect', 'modifiers', 'width', 'height', 'show', 'toTarget', 'strokes', 'smooth', 'durationMs', 'holdMs', 'label', 'app', 'args', 'cwd'];
 
 /** Steps carry no per-field schema (it would cost every session), so unknown fields are caught here. */
 const STEP_FIELDS = new Set([...ACTION_FIELDS, 'action', 'ms', 'settleMs', 'risk', 'riskNote']);
@@ -33,6 +33,7 @@ export function validateSteps(steps, maxSteps) {
 		if (POINTER.has(action) && !hasTarget && !(Number.isInteger(step.x) && Number.isInteger(step.y))) throw new Error(`step ${n} (${action}) needs x and y, or a target`);
 		if (action === 'drag' && step.toTarget === undefined && !(Number.isInteger(step.toX) && Number.isInteger(step.toY))) throw new Error(`step ${n} (drag) needs toX and toY, or a toTarget`);
 		if (action === 'draw' && !(Array.isArray(step.strokes) && step.strokes.length > 0 && step.strokes.every((stroke) => Array.isArray(stroke) && stroke.length > 0))) throw new Error(`step ${n} (draw) needs strokes: [[[x,y],[x,y],...], ...]`);
+		if (action === 'launch' && typeof step.app !== 'string') throw new Error(`step ${n} (launch) needs app`);
 		if (action === 'type' && typeof step.text !== 'string') throw new Error(`step ${n} (type) needs text`);
 		if (action === 'key' && typeof step.key !== 'string') throw new Error(`step ${n} (key) needs key`);
 		if (action === 'focus' && typeof step.title !== 'string' && typeof step.hwnd !== 'string') throw new Error(`step ${n} (focus) needs title or hwnd`);
@@ -84,6 +85,7 @@ export function describeStep(step, index) {
 	if (step.modifiers !== undefined) parts.push(`with ${Array.isArray(step.modifiers) ? step.modifiers.join('+') : step.modifiers}`);
 	if (Number.isInteger(step.width) || Number.isInteger(step.height)) parts.push(`size ${step.width ?? '?'}x${step.height ?? '?'}`);
 	if (typeof step.show === 'string') parts.push(step.show);
+	if (typeof step.app === 'string') parts.push(`'${step.app}'${typeof step.args === 'string' ? ` ${step.args}` : ''}`);
 	if (typeof step.title === 'string') parts.push(`in '${step.title}'`);
 	if (typeof step.key === 'string') parts.push(step.key);
 	if (typeof step.text === 'string') parts.push(JSON.stringify(step.text.length > 60 ? `${step.text.slice(0, 60)}…` : step.text));

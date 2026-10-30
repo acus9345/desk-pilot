@@ -23,12 +23,15 @@ export function frameText(f, label = 'frame') {
 		if (cap.w === del.w && cap.h === del.h) lines.push(`image ${del.w}x${del.h} is 1:1 with the screen: screen x = ${ox}image_x, screen y = ${oy}image_y.`);
 		else lines.push(`image ${del.w}x${del.h} shows ${cap.w}x${cap.h} screen pixels: screen x = ${ox}image_x * ${r4(cap.w / del.w)}, screen y = ${oy}image_y * ${r4(cap.h / del.h)}.`);
 	}
+	if (f.numbered !== undefined) lines.push(`${f.numbered} controls numbered: target takes the number.`);
 	lines.push(`foreground ${foregroundText(f.foreground)} · cursor ${f.cursor?.x},${f.cursor?.y}`);
 	if (label === 'frame' && Array.isArray(f.screens) && f.screens.length > 1) {
 		lines.push(`screens ${f.screens.map((s) => `${s.primary ? 'primary ' : ''}${s.device} ${s.bounds}`).join('; ')}`);
 	}
 	return lines.join('\n');
 }
+
+const windowLine = (w) => `${w.hwnd} ${quote(w.title)} (${w.process ?? '?'}) @ ${w.bounds}`;
 
 /** Where input is now, without repeating the control that was just acted on. */
 function stateParts(a) {
@@ -46,6 +49,7 @@ function actionSummary(a) {
 	if (a.drop) parts.push(`onto ${a.drop}`);
 	if (a.drew) parts.push(`drew ${a.drew}`);
 	if (a.modifiers) parts.push(`with ${a.modifiers}`);
+	if (a.opened) parts.push(`opened ${windowLine(a.opened)}`);
 	if (a.action === 'window' && a.window) parts.push(`window ${quote(a.window.title)} @ ${a.window.bounds}${a.window.maximized ? ' maximized' : a.window.minimized ? ' minimized' : ''}`);
 	parts.push(...stateParts(a));
 	const extra = [];
@@ -64,6 +68,11 @@ export function windowsText(a) {
 	return lines.join('\n');
 }
 
+/** The index is the one screen_view's screen takes. */
+export function screensText(a) {
+	return ['<screens>', ...(a.screens ?? []).map((s, i) => `${i} ${s.device}${s.primary ? ' primary' : ''} ${s.bounds} work ${s.work}${s.scale ? ` ${s.scale}%` : ''}`)].join('\n');
+}
+
 export function controlsText(a) {
 	const w = a.window ?? {};
 	const lines = [`<controls window=${quote(w.title)} hwnd=${w.hwnd} shown=${a.kept} of=${a.total}${a.truncated ? ' truncated' : ''}>`];
@@ -76,6 +85,8 @@ export function controlsText(a) {
 export function actionText(a) {
 	if (a.action === 'windows') return windowsText(a);
 	if (a.action === 'controls') return controlsText(a);
+	if (a.action === 'screens') return screensText(a);
+	if (a.clipboard !== undefined) return `clipboard: ${a.clipboard}`;
 	const { head, extra } = actionSummary(a);
 	return [`${a.action} ok${head ? ` · ${head}` : ''}`, ...extra].join('\n');
 }
@@ -97,7 +108,7 @@ export function sequenceText(s) {
 		}
 		if (r.a === undefined) continue;
 		last = r.a;
-		const notable = [...(r.a.drew ? [`drew ${r.a.drew}`] : []), ...(r.a.typed && !r.a.typed.startsWith('verified') ? [`typed: ${r.a.typed}`] : []), ...(r.a.notes ?? [])];
+		const notable = [...(r.a.drew ? [`drew ${r.a.drew}`] : []), ...(r.a.opened ? [`opened ${windowLine(r.a.opened)}`] : []), ...(r.a.clipboard === undefined ? [] : [`clipboard: ${r.a.clipboard}`]), ...(r.a.typed && !r.a.typed.startsWith('verified') ? [`typed: ${r.a.typed}`] : []), ...(r.a.notes ?? [])];
 		if (notable.length > 0) lines.push(`#${r.n} ${r.action}: ${notable.join('; ')}`);
 	}
 	if (s.stopped) lines.push(`stopped: ${s.stopped}`);
