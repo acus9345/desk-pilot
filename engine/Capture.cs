@@ -159,24 +159,32 @@ namespace DeskPilot
             var started = DateTime.UtcNow;
             int settleMax = P.Int(p, "settleMaxMs") ?? 0;
             req.Check();
-            var bmp = Grab(rect);
-            var px = Pixels(bmp);
-            var hash = Hash(px, rect.Width, rect.Height);
-            if (settleMax > 0)
+            Bitmap bmp;
+            int[] px;
+            string hash;
+            Program.OverlayAside(true);
+            try
             {
-                while ((DateTime.UtcNow - started).TotalMilliseconds < settleMax)
+                bmp = Grab(rect);
+                px = Pixels(bmp);
+                hash = Hash(px, rect.Width, rect.Height);
+                if (settleMax > 0)
                 {
-                    req.Sleep(60);
-                    var next = Grab(rect);
-                    var nextPx = Pixels(next);
-                    var nextHash = Hash(nextPx, rect.Width, rect.Height);
-                    bmp.Dispose();
-                    bmp = next; px = nextPx;
-                    bool stable = nextHash == hash;
-                    hash = nextHash;
-                    if (stable) break;
+                    while ((DateTime.UtcNow - started).TotalMilliseconds < settleMax)
+                    {
+                        req.Sleep(60);
+                        var next = Grab(rect);
+                        var nextPx = Pixels(next);
+                        var nextHash = Hash(nextPx, rect.Width, rect.Height);
+                        bmp.Dispose();
+                        bmp = next; px = nextPx;
+                        bool stable = nextHash == hash;
+                        hash = nextHash;
+                        if (stable) break;
+                    }
                 }
             }
+            finally { Program.OverlayAside(false); }
             int settled = (int)(DateTime.UtcNow - started).TotalMilliseconds;
 
             var key = P.Str(p, "key") ?? (kind + ":" + rect.X + "," + rect.Y + "," + rect.Width + "," + rect.Height);

@@ -538,12 +538,19 @@ const coverRegion = barRegion.split(',').map(Number);
 await call(a.client, 'desktop_control', { action: 'window', title: canvasTitle, x: coverRegion[0] - 20, y: coverRegion[1] - 50, width: coverRegion[2] + 40, height: coverRegion[3] + 70 });
 await call(a.client, 'desktop_control', { action: 'focus', title: canvasTitle });
 await sleep(2600); // the overlay's linger, so it is really gone
+// Another program's view of the same pixels, and of the overlay's windows: read from outside the engine.
+const outside = () => spawnSync('powershell.exe', ['-NoProfile', '-Command', `Add-Type -AssemblyName System.Drawing; Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class DeskSeen { public delegate bool Each(IntPtr h, IntPtr l); [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string c, string t); [DllImport("user32.dll")] public static extern bool EnumWindows(Each e, IntPtr l); [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p); [DllImport("user32.dll")] public static extern bool GetWindowDisplayAffinity(IntPtr h, out uint a); [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr v); public static int Excluded(string title) { uint owner, pid, affinity; int n = 0; GetWindowThreadProcessId(FindWindow(null, title), out owner); EnumWindows(delegate (IntPtr h, IntPtr l) { GetWindowThreadProcessId(h, out pid); if (pid == owner && GetWindowDisplayAffinity(h, out affinity) && affinity != 0) n++; return true; }, IntPtr.Zero); return n; } }'; $null = [DeskSeen]::SetProcessDpiAwarenessContext([IntPtr]::new(-4)); $x, $y, $w, $h = '${barRegion}'.Split(','); $b = New-Object System.Drawing.Bitmap ([int]$w), ([int]$h); $g = [System.Drawing.Graphics]::FromImage($b); $g.CopyFromScreen([int]$x, [int]$y, 0, 0, $b.Size); $m = New-Object IO.MemoryStream; $b.Save($m, [System.Drawing.Imaging.ImageFormat]::Bmp); Write-Output ([Convert]::ToBase64String([Security.Cryptography.MD5]::Create().ComputeHash($m.ToArray())) + ' ' + [DeskSeen]::Excluded('desk-pilot overlay'))`], { encoding: 'utf8' }).stdout.trim().split(' ');
 const quiet = await regionHash(a.client);
-const idleBatch = call(a.client, 'desktop_sequence', { steps: [{ action: 'wait', ms: 1800 }], capture: 'none' });
+const [quietOutside] = outside();
+const idleBatch = call(a.client, 'desktop_sequence', { steps: [{ action: 'wait', ms: 4000 }], capture: 'none' });
 await sleep(900);
-const busy = await regionHash(a.client);
+const busy = [];
+for (let i = 0; i < 6; i++) busy.push(await regionHash(a.client));
+const [busyOutside, excluded] = outside();
 await idleBatch;
-check('the overlay never appears in a frame', quiet === busy, `${quiet} / ${busy}`);
+check('the overlay never appears in a frame', busy.every((hash) => hash === quiet), `${quiet} / ${busy.join(' ')}`);
+check('other programs still see the overlay, and it survives a grab', quietOutside !== busyOutside, `${quietOutside} / ${busyOutside}`);
+check('no overlay window is excluded from capture, which ends NVIDIA recordings', excluded === '0', `excluded ${excluded}`);
 
 const bar = await startServer({ DESK_PILOT_DATA_DIR: join(work, 'data-bar'), DESK_PILOT_OVERLAY_IN_FRAMES: '1' });
 await call(bar.client, 'desktop_control', { action: 'focus', title: canvasTitle });

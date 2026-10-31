@@ -3,9 +3,11 @@
 // Four per-pixel-alpha windows, shown only while Claude acts (and while anything is held):
 // a blue glow around the primary screen, a soft halo that follows the pointer, a small
 // label beside it, and a control bar at the bottom with Take over and Stop. None of them
-// activates or takes focus, and all are excluded from screen capture, so they never
-// appear in a frame the model reads. Only the bar takes clicks, and it stops taking them
-// while Claude's own pointer action runs, so a click aimed underneath it cannot hit Stop.
+// activates or takes focus, and all step aside for the instant of a grab, so they never
+// appear in a frame the model reads. They are not excluded from capture instead: NVIDIA's
+// recorder treats an excluded window as DRM and ends the recording. Only the bar takes
+// clicks, and it stops taking them while Claude's own pointer action runs, so a click
+// aimed underneath it cannot hit Stop.
 using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -20,6 +22,7 @@ namespace DeskPilot
     public class Layer : Form
     {
         readonly bool clickThrough;
+        bool aside; // out of a grab's way: anything drawn meanwhile stays unseen too
 
         public Layer(bool clickThrough)
         {
@@ -59,7 +62,7 @@ namespace DeskPilot
                 var at = new POINT { X = x, Y = y };
                 var origin = new POINT();
                 var size = new SIZE { cx = image.Width, cy = image.Height };
-                var blend = new BLENDFUNCTION { SourceConstantAlpha = alpha, AlphaFormat = 1 };
+                var blend = new BLENDFUNCTION { SourceConstantAlpha = aside ? (byte)0 : alpha, AlphaFormat = 1 };
                 Native.UpdateLayeredWindow(Handle, screen, ref at, ref size, memory, ref origin, 0, ref blend, 2);
             }
             finally
@@ -74,8 +77,14 @@ namespace DeskPilot
         /// <summary>Change the whole window's opacity without resending the bitmap.</summary>
         public void Fade(byte alpha)
         {
-            var blend = new BLENDFUNCTION { SourceConstantAlpha = alpha, AlphaFormat = 1 };
+            var blend = new BLENDFUNCTION { SourceConstantAlpha = aside ? (byte)0 : alpha, AlphaFormat = 1 };
             Native.UpdateLayeredWindowAlpha(Handle, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, 0, ref blend, 2);
+        }
+
+        public void Aside(bool on)
+        {
+            aside = on;
+            Fade(255);
         }
 
         public void MoveTo(int x, int y)
@@ -169,15 +178,18 @@ namespace DeskPilot
             DrawBar();
             lastX = int.MinValue;
             Tick();
-            foreach (var layer in new[] { edge, halo, tag, (Layer)this })
-            {
-                layer.Show();
-                // WDA_EXCLUDEFROMCAPTURE (Windows 10 2004+): nothing here reaches a frame.
-                if (!inFrames) Native.SetWindowDisplayAffinity(layer.Handle, 0x11);
-            }
+            foreach (var layer in new[] { edge, halo, tag, (Layer)this }) layer.Show();
             DrawTag();
             animation.Start();
             if (!hotkey) hotkey = Native.RegisterHotKey(handle, 1, 0x4000, 0x1B);
+        }
+
+        /// <summary>Clear every layer off the screen for a grab, or bring them back. True if any was showing.</summary>
+        public bool Aside(bool on)
+        {
+            if (inFrames) return false;
+            foreach (var layer in new[] { edge, halo, tag, (Layer)this }) layer.Aside(on);
+            return Visible;
         }
 
         public void HideSoon()

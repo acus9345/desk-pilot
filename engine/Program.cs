@@ -292,6 +292,16 @@ namespace DeskPilot
             if (Banner != null) Banner.HideNow();
         }
 
+        /// <summary>Take the overlay off the screen around a grab, or put it back. The second flush
+        /// covers a composition already under way when the first was asked for.</summary>
+        public static void OverlayAside(bool on)
+        {
+            if (Banner == null) return;
+            bool showing = false;
+            Banner.Invoke((Action)delegate { showing = Banner.Aside(on); });
+            if (on && showing) { Native.DwmFlush(); Native.DwmFlush(); }
+        }
+
         /// <summary>Text beside the pointer for this action, or none.</summary>
         public static void ShowLabel(string text)
         {

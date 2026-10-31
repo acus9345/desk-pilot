@@ -81,7 +81,7 @@ namespace DeskPilot
 
         [DllImport("user32.dll")] public static extern bool RegisterHotKey(IntPtr h, int id, uint mods, uint vk);
         [DllImport("user32.dll")] public static extern bool UnregisterHotKey(IntPtr h, int id);
-        [DllImport("user32.dll")] public static extern bool SetWindowDisplayAffinity(IntPtr h, uint affinity);
+        [DllImport("dwmapi.dll")] public static extern int DwmFlush();
         [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
         [DllImport("user32.dll")] public static extern IntPtr GetWindowLongPtrW(IntPtr h, int index);
         [DllImport("user32.dll")] public static extern IntPtr SetWindowLongPtrW(IntPtr h, int index, IntPtr value);
