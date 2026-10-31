@@ -38,7 +38,7 @@ const INSTRUCTIONS = 'Windows desktop control. Read controls, act by name or ind
 const config = settings();
 const engine = new Engine(config);
 const handlers = createHandlers(engine, config);
-const server = new Server({ name: 'desk-pilot', version: '0.4.1' }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });
+const server = new Server({ name: 'desk-pilot', version: '0.4.2' }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
 server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
