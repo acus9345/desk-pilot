@@ -1,6 +1,6 @@
 # desk-pilot
 
-**Windows only.** A Claude Code plugin(or any other agentic tool i guess)  that gives Claude eyes and hands on the real Windows desktop: it sees the actual screen, reads each window's controls, and drives the real mouse and keyboard.
+**Windows only.** A Claude Code plugin(or any other agentic tool i guess)  that gives Claude eyes and hands on the real Windows desktop: it sees the actual screen, reads each window's controls, and drives the real mouse and keyboard.this is outdated and desk-crews might be a better choice for u*
 <img width="1159" height="728" alt="image" src="https://github.com/user-attachments/assets/6154ee90-4af4-493e-a9fd-eb5372ec1cff" />
 (trust me dude its enough to do anything that has to be done with ui)
 
